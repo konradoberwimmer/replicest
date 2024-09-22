@@ -1,2 +1,2 @@
-mod estimates;
-mod replication;
+pub mod estimates;
+pub mod replication;
