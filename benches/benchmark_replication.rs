@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use nalgebra::{dvector, DMatrix};
+use nalgebra::{dvector, DMatrix, DVector};
 use replicest::replication;
 use replicest::estimates;
 
@@ -41,5 +41,74 @@ pub fn small_benchmark_mean(c: &mut Criterion) {
     }));
 }
 
-criterion_group!(benches, small_benchmark_mean);
+pub fn large_benchmark_mean(c: &mut Criterion) {
+    let mut reader_builder = csv::ReaderBuilder::new();
+    reader_builder.has_headers(false);
+
+    let mut data : Vec<DMatrix<f64>> = Vec::new();
+
+    for imputation in 1..5 {
+        let mut reader = reader_builder.from_path(format!("./benches/_data/imp{}.csv", imputation)).unwrap();
+        let mut nrows = 0;
+        let mut values = Vec::new();
+
+        for record in reader.records() {
+            for field in &record.unwrap() {
+                values.push(field.parse::<f64>().unwrap());
+            }
+            nrows += 1;
+        }
+
+        let ncols = values.len() / nrows;
+
+        let data_imputation = DMatrix::from_row_slice(nrows, ncols, &values);
+        data.push(data_imputation);
+    }
+
+    let mut x : Vec<&DMatrix<f64>> = Vec::new();
+    for data_entry in &data {
+        x.push(&data_entry);
+    }
+
+    let mut reader = reader_builder.from_path("./benches/_data/wgt.csv").unwrap();
+    let mut values = Vec::new();
+
+    for record in reader.records() {
+        for field in &record.unwrap() {
+            values.push(field.parse::<f64>().unwrap());
+        }
+    }
+
+    let wgt = DVector::from(values);
+
+    let mut reader = reader_builder.from_path("./benches/_data/repwgt.csv").unwrap();
+    let mut nrows = 0;
+    let mut values = Vec::new();
+
+    for record in reader.records() {
+        for field in &record.unwrap() {
+            values.push(field.parse::<f64>().unwrap());
+        }
+        nrows += 1;
+    }
+
+    let ncols = values.len() / nrows;
+
+    let repwgt = DMatrix::from_row_slice(nrows, ncols, &values);
+
+    let result = replication::replicate_estimates(estimates::mean, &x, &wgt, &repwgt, 1.0);
+    println!("{:?}", result);
+
+    c.bench_function("n10000 c5 i5 wgt50", |b| b.iter(|| {
+        replication::replicate_estimates(
+            black_box(estimates::mean),
+            black_box(&x),
+            black_box(&wgt),
+            black_box(&repwgt),
+            black_box(1.0)
+        );
+    }));
+}
+
+criterion_group!(benches, small_benchmark_mean, large_benchmark_mean);
 criterion_main!(benches);

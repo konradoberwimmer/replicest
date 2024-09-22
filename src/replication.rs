@@ -1,5 +1,6 @@
 use nalgebra::{DMatrix, DVector};
 
+#[derive(Debug)]
 pub struct ReplicatedEstimates {
     final_estimates: DVector<f64>,
     sampling_variances: DVector<f64>,
