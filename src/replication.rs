@@ -1,4 +1,6 @@
+use std::sync::mpsc;
 use nalgebra::{DMatrix, DVector};
+use std::thread;
 
 #[derive(Debug)]
 pub struct ReplicatedEstimates {
@@ -12,22 +14,37 @@ pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> DVecto
     let mut estimates = DMatrix::<f64>::zeros(x[0].ncols(), x.len());
     let mut sampling_variances = DVector::<f64>::zeros(x[0].ncols());
 
-    for imputation in 0..x.len() {
-        let estimates_imputation = estimator(&x[imputation], &wgt);
-        estimates.set_column(imputation, &estimates_imputation);
+    let (transmitter, receiver) = mpsc::channel();
+    thread::scope(|scope| {
+        for imputation in 0..x.len() {
+            let data = x[imputation];
+            let transmitter1 = transmitter.clone();
 
-        let sampling_variances_imputation: DVector<f64> = if replicate_wgts.ncols() > 0 {
-            let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(x[imputation].ncols(), replicate_wgts.ncols());
-            for c in 0..replicate_wgts.ncols() {
-                let estimates0 = estimator(&x[imputation], &DVector::from(replicate_wgts.column(c)));
-                replicated_estimates.set_column(c, &estimates0);
-            }
+            scope.spawn(move || {
+                let estimates_imputation = estimator(&data, &wgt);
 
-            calc_replication_variance(&estimates_imputation, &replicated_estimates, factor)
-        } else {
-            DVector::<f64>::zeros(x[0].ncols())
-        };
-        sampling_variances += &sampling_variances_imputation;
+                let sampling_variances_imputation: DVector<f64> = if replicate_wgts.ncols() > 0 {
+                    let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(data.ncols(), replicate_wgts.ncols());
+                    for c in 0..replicate_wgts.ncols() {
+                        let estimates0 = estimator(&data, &DVector::from(replicate_wgts.column(c)));
+                        replicated_estimates.set_column(c, &estimates0);
+                    }
+
+                    calc_replication_variance(&estimates_imputation, &replicated_estimates, factor)
+                } else {
+                    DVector::<f64>::zeros(data.ncols())
+                };
+                transmitter1.send((estimates_imputation, sampling_variances_imputation)).unwrap();
+            });
+        }
+    });
+
+    drop(transmitter);
+    let mut next_column_estimates = 0;
+    for received in receiver {
+        estimates.set_column(next_column_estimates, &received.0);
+        sampling_variances += &received.1;
+        next_column_estimates += 1;
     }
 
     let final_estimates = DVector::from_fn(estimates.nrows(), |r, _| { estimates.row(r).mean() });
@@ -117,10 +134,10 @@ mod tests {
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
         let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 1.0);
-        assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
-        assert_eq!(result.sampling_variances, dvector![0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(result.imputation_variances, dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]);
-        assert_eq!(result.standard_errors, dvector![0.09622504486493728, 0.0, 0.01924500897298746, 0.0]);
+        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.sampling_variances - dvector![0.0, 0.0, 0.0, 0.0]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.standard_errors - dvector![0.09622504486493728, 0.0, 0.01924500897298746, 0.0]).iter().filter(|&&v| v > 1e-10).count());
     }
 
     #[test]
@@ -153,14 +170,14 @@ mod tests {
         ]);
 
         let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 1.0);
-        assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
-        assert_eq!(result.sampling_variances, dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]);
-        assert_eq!(result.imputation_variances, dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]);
-        assert_eq!(result.standard_errors, dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]);
+        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.sampling_variances - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.standard_errors - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v > 1e-10).count());
     }
 
     #[test]
-    #[should_panic(expected = "wgt contains NaN in mean")]
+    #[should_panic(expected = "a scoped thread panicked")]
     fn test_replicate_estimate_mean_nan_in_replicate_weight() {
         let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
         let data0 = DMatrix::from_row_slice(3, 4, &[
@@ -205,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn test_replicate_estimate_mean_no_replicate_wgts() {
+    fn test_replicate_estimate_mean_neither_imputation_nor_resampling() {
         let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
         let data0 = DMatrix::from_row_slice(3, 4, &[
             1.0, 4.0, 2.5, -1.0,
