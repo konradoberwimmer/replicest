@@ -47,8 +47,8 @@ pub fn large_benchmark_mean(c: &mut Criterion) {
 
     let mut data : Vec<DMatrix<f64>> = Vec::new();
 
-    for imputation in 1..5 {
-        let mut reader = reader_builder.from_path(format!("./benches/_data/imp{}.csv", imputation)).unwrap();
+    for imputation in 1..=5 {
+        let mut reader = reader_builder.from_path(format!("./tests/_data/imp{}.csv", imputation)).unwrap();
         let mut nrows = 0;
         let mut values = Vec::new();
 
@@ -70,7 +70,7 @@ pub fn large_benchmark_mean(c: &mut Criterion) {
         x.push(&data_entry);
     }
 
-    let mut reader = reader_builder.from_path("./benches/_data/wgt.csv").unwrap();
+    let mut reader = reader_builder.from_path("./tests/_data/wgt.csv").unwrap();
     let mut values = Vec::new();
 
     for record in reader.records() {
@@ -81,7 +81,7 @@ pub fn large_benchmark_mean(c: &mut Criterion) {
 
     let wgt = DVector::from(values);
 
-    let mut reader = reader_builder.from_path("./benches/_data/repwgt.csv").unwrap();
+    let mut reader = reader_builder.from_path("./tests/_data/repwgt.csv").unwrap();
     let mut nrows = 0;
     let mut values = Vec::new();
 
@@ -95,9 +95,6 @@ pub fn large_benchmark_mean(c: &mut Criterion) {
     let ncols = values.len() / nrows;
 
     let repwgt = DMatrix::from_row_slice(nrows, ncols, &values);
-
-    let result = replication::replicate_estimates(estimates::mean, &x, &wgt, &repwgt, 1.0);
-    println!("{:?}", result);
 
     c.bench_function("n10000 c5 i5 wgt50", |b| b.iter(|| {
         replication::replicate_estimates(

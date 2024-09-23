@@ -2,10 +2,10 @@ use nalgebra::{DMatrix, DVector};
 
 #[derive(Debug)]
 pub struct ReplicatedEstimates {
-    final_estimates: DVector<f64>,
-    sampling_variances: DVector<f64>,
-    imputation_variances: DVector<f64>,
-    standard_errors: DVector<f64>,
+    pub final_estimates: DVector<f64>,
+    pub sampling_variances: DVector<f64>,
+    pub imputation_variances: DVector<f64>,
+    pub standard_errors: DVector<f64>,
 }
 
 pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> DVector<f64>, x: &Vec<&DMatrix<f64>>, wgt: &DVector<f64>, replicate_wgts: &DMatrix<f64>, factor: f64) -> ReplicatedEstimates {
