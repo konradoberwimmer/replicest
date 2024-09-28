@@ -58,6 +58,14 @@ fn test_replicate_estimates_for_a_mean() {
     let repwgt = DMatrix::from_row_slice(nrows, ncols, &values);
 
     let result = replication::replicate_estimates(estimates::mean, &x, &wgt, &repwgt, 1.0);
-    assert_eq!(0, (result.final_estimates - dvector![0.03599087180982961, 0.054048403991529756, 0.054505197688378325, 0.04159357573970399, 0.042906564801087246]).iter().filter(|&&v| v > 1e-10).count());
-    assert_eq!(0, (result.standard_errors - dvector![0.01107463624697274, 0.009856163557127698, 0.00938364895138013, 0.010089172012288873, 0.011135325191130828]).iter().filter(|&&v| v > 1e-10).count());
+    assert_eq!(5, result.parameter_names().len());
+    assert_eq!("mean_x5", result.parameter_names()[4]);
+    assert_eq!(0, (result.final_estimates() - dvector![0.03599087180982961, 0.054048403991529756, 0.054505197688378325, 0.04159357573970399, 0.042906564801087246]).iter().filter(|&&v| v > 1e-10).count());
+    assert_eq!(0, (result.standard_errors() - dvector![0.01107463624697274, 0.009856163557127698, 0.00938364895138013, 0.010089172012288873, 0.011135325191130828]).iter().filter(|&&v| v > 1e-10).count());
+
+    let result_again = replication::replicate_estimates(estimates::mean, &x, &wgt, &repwgt, 1.0);
+    assert_eq!(5, result_again.parameter_names().len());
+    assert_eq!("mean_x5", result_again.parameter_names()[4]);
+    assert_eq!(0, (result_again.final_estimates() - dvector![0.03599087180982961, 0.054048403991529756, 0.054505197688378325, 0.04159357573970399, 0.042906564801087246]).iter().filter(|&&v| v > 1e-10).count());
+    assert_eq!(0, (result_again.standard_errors() - dvector![0.01107463624697274, 0.009856163557127698, 0.00938364895138013, 0.010089172012288873, 0.011135325191130828]).iter().filter(|&&v| v > 1e-10).count());
 }

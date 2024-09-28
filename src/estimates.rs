@@ -1,6 +1,21 @@
 use nalgebra::{DMatrix, DVector};
 
-pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> DVector<f64> {
+pub struct Estimates {
+    parameter_names: Vec<String>,
+    estimates: DVector<f64>,
+}
+
+impl Estimates {
+    pub fn parameter_names(&self) -> &Vec<String> {
+        &self.parameter_names
+    }
+
+    pub fn estimates(&self) -> &DVector<f64> {
+        &self.estimates
+    }
+}
+
+pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in mean");
     assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in mean");
 
@@ -11,7 +26,10 @@ pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> DVector<f64> {
     let weighted_sums = x_transpose_clean * wgt;
     let sum_of_weights = x_transpose_ind * wgt;
 
-    weighted_sums.component_div(&sum_of_weights)
+    Estimates {
+        parameter_names: (1..=x.ncols()).into_iter().map(|e| format!("mean_x{}", e)).collect(),
+        estimates: weighted_sums.component_div(&sum_of_weights),
+    }
 }
 
 #[cfg(test)]
@@ -30,7 +48,9 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
 
         let result = mean(&data, &wgt);
-        assert_eq!(result, dvector![2.25, 3.125, 2.0, -2.5]);
+        assert_eq!(result.parameter_names.len(), 4);
+        assert_eq!(result.parameter_names[1], "mean_x2");
+        assert_eq!(result.estimates, dvector![2.25, 3.125, 2.0, -2.5]);
     }
 
     #[test]
@@ -71,7 +91,9 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
 
         let result = mean(&data, &wgt);
-        assert_eq!(result, dvector![2.25, 3.125, 1.9]);
+        assert_eq!(result.parameter_names.len(), 3);
+        assert_eq!(result.parameter_names[2], "mean_x3");
+        assert_eq!(result.estimates, dvector![2.25, 3.125, 1.9]);
     }
 
     #[test]
@@ -85,6 +107,8 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
 
         let result = mean(&data, &wgt);
-        assert_eq!(true, result[0].is_nan());
+        assert_eq!(result.parameter_names.len(), 1);
+        assert_eq!(result.parameter_names[0], "mean_x1");
+        assert_eq!(true, result.estimates[0].is_nan());
     }
 }
