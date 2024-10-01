@@ -161,10 +161,10 @@ mod tests {
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
         let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 1.0);
-        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v > 1e-10).count());
-        assert_eq!(0, (result.sampling_variances - dvector![0.0, 0.0, 0.0, 0.0]).iter().filter(|&&v| v > 1e-10).count());
-        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v > 1e-10).count());
-        assert_eq!(0, (result.standard_errors - dvector![0.09622504486493728, 0.0, 0.01924500897298746, 0.0]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (result.sampling_variances - dvector![0.0, 0.0, 0.0, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (result.standard_errors - dvector![0.09622504486493728, 0.0, 0.01924500897298746, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
     }
 
     #[test]
@@ -199,10 +199,10 @@ mod tests {
         let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 1.0);
         assert_eq!(4, result.parameter_names.len());
         assert_eq!("mean_x2", result.parameter_names[1]);
-        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v > 1e-10).count());
-        assert_eq!(0, (result.sampling_variances - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v > 1e-10).count());
-        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v > 1e-10).count());
-        assert_eq!(0, (result.standard_errors - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v > 1e-10).count());
+        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (result.sampling_variances - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (result.standard_errors - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v.abs() > 1e-10).count());
     }
 
     #[test]
