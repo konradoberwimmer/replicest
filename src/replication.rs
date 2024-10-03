@@ -36,8 +36,8 @@ impl ReplicatedEstimates {
 
 pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates, x: &Vec<&DMatrix<f64>>, wgt: &DVector<f64>, replicate_wgts: &DMatrix<f64>, factor: f64) -> ReplicatedEstimates {
     let mut parameter_names = Vec::<String>::new();
-    let mut estimates = DMatrix::<f64>::zeros(x[0].ncols(), x.len());
-    let mut sampling_variances = DVector::<f64>::zeros(x[0].ncols());
+    let mut estimates = DMatrix::<f64>::zeros(0, 0);
+    let mut sampling_variances = DVector::<f64>::zeros(0);
 
     let (transmitter, receiver) = mpsc::channel();
     thread::scope(|scope| {
@@ -49,7 +49,7 @@ pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estima
                 let estimates_imputation = estimator(&data, &wgt);
 
                 let sampling_variances_imputation: DVector<f64> = if replicate_wgts.ncols() > 0 {
-                    let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(data.ncols(), replicate_wgts.ncols());
+                    let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(estimates_imputation.estimates().len(), replicate_wgts.ncols());
                     for c in 0..replicate_wgts.ncols() {
                         let estimates0 = estimator(&data, &DVector::from(replicate_wgts.column(c)));
                         replicated_estimates.set_column(c, &estimates0.estimates());
@@ -57,7 +57,7 @@ pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estima
 
                     calc_replication_variance(&estimates_imputation.estimates(), &replicated_estimates, factor)
                 } else {
-                    DVector::<f64>::zeros(data.ncols())
+                    DVector::<f64>::zeros(estimates_imputation.estimates().len())
                 };
                 transmitter1.send((estimates_imputation, sampling_variances_imputation)).unwrap();
             });
@@ -68,6 +68,10 @@ pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estima
     let mut next_column_estimates = 0;
     for received in receiver {
         parameter_names = received.0.parameter_names().clone();
+        if next_column_estimates == 0 {
+            estimates = DMatrix::<f64>::zeros(received.0.estimates().len(), x.len());
+            sampling_variances = DVector::<f64>::zeros(received.0.estimates().len());
+        }
         estimates.set_column(next_column_estimates, &received.0.estimates());
         sampling_variances += &received.1;
         next_column_estimates += 1;

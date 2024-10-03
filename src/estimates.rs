@@ -38,15 +38,34 @@ pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in correlation");
 
     let means = mean(&x, &wgt).estimates;
-    let x_centered = DMatrix::<f64>::from_columns(
+    let mut x_centered = DMatrix::<f64>::from_columns(
         &Vec::from_iter(x.column_iter().enumerate().map(|(i, c)| c.clone_owned() - DVector::<f64>::from_element(c.nrows(), means[i])))
     );
+
+    // take care of NaN by setting such values as well as such weights to zero
+    let mut weights_by_column : Vec<DVector<f64>> = Vec::new();
+    for i in 0..x_centered.ncols() {
+        weights_by_column.push(wgt.clone());
+        for j in 0..x_centered.nrows() {
+            if x_centered[(j, i)].is_nan() {
+                x_centered[(j, i)] = 0.0;
+                weights_by_column[i][j] = 0.0;
+            }
+        }
+    }
+    let weights_by_column_sum : Vec<f64> = weights_by_column.iter().map(|w| w.sum()).collect();
+
     let x_centered_weighted = DMatrix::<f64>::from_columns(
         &Vec::from_iter(x_centered.column_iter().map(|c| c.component_mul(wgt)))
     );
     let x_centered_transposed = x_centered.transpose();
 
-    let covariance_matrix = (x_centered_transposed * x_centered_weighted).component_div(&DMatrix::<f64>::from_element(x.ncols(), x.ncols(), wgt.sum() - 1.0));
+    let mut covariance_matrix = x_centered_transposed * x_centered_weighted;
+    for i in 0..covariance_matrix.nrows() {
+        for j in 0..covariance_matrix.ncols() {
+            covariance_matrix[(i, j)] /= weights_by_column_sum[i].min(weights_by_column_sum[j]) - 1.0;
+        }
+    }
 
     let standard_deviations : Vec<f64> = covariance_matrix.diagonal().iter().map(|v| v.sqrt()).collect();
     let mut standard_deviations_matrix_inverse = DMatrix::<f64>::zeros(standard_deviations.len(), standard_deviations.len());
@@ -199,5 +218,67 @@ mod tests {
             1.0, 0.3645639949803244, 0.3276950278469914, 0.0801943765003546, 1.0,
             0.1329582523578879, 0.0528937158520245, 1.0, 0.1476852643924908, 1.0,
         ]).iter().filter(|&&v| v.abs() > 1e-10).count());
+    }
+
+    #[test]
+    #[should_panic(expected = "dimension mismatch of x and wgt in correlation")]
+    fn test_correlation_panic_dimension_mismatch() {
+        let data = DMatrix::from_row_slice(2, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        correlation(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "wgt contains NaN in correlation")]
+    fn test_correlation_panic_wgt_containing_nan() {
+        let data = DMatrix::from_row_slice(3, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+            3.0, 3.0, 1.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, f64::NAN];
+
+        correlation(&data, &wgt);
+    }
+
+    #[test]
+    fn test_correlation_with_nan() {
+        let data = DMatrix::from_row_slice(5, 3, &[
+            1.0, 2.0, 3.0,
+            2.0, 1.0, 1.0,
+            3.0, 3.0, 3.0,
+            4.0, 2.0, f64::NAN,
+            5.0, 1.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 2.0, 1.0, 1.0, 1.5];
+
+        let result = correlation(&data, &wgt);
+        assert_eq!(result.parameter_names.len(), 12);
+        assert_eq!(result.parameter_names[2], "covariance_x1_x3");
+        assert_eq!(0, (result.estimates - dvector![
+            2.3636363636363638, -0.18181818181818182, 0.727272727272726, 0.6433566433566433, 0.484848484848484, 1.131313131313130,
+            1.0, -0.147441956154897, 0.4447495899966607, 1.0, 0.56831449608436613, 1.0
+        ]).iter().filter(|&&v| v.abs() > 1e-10).count());
+    }
+
+    #[test]
+    #[should_panic(expected = "standard deviation matrix not invertible")]
+    fn test_correlation_all_nan() {
+        let data = DMatrix::from_row_slice(3, 2, &[
+            f64::NAN, 1.0,
+            f64::NAN, 2.0,
+            f64::NAN, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        correlation(&data, &wgt);
     }
 }
