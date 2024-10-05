@@ -123,7 +123,7 @@ pub fn large_benchmark_correlation(c: &mut Criterion) {
         x.push(data1);
     }
 
-    c.bench_function("mean n10000 c5 i5 wgt50", |b| b.iter(|| {
+    c.bench_function("correlation n10000 c5 i5 wgt50", |b| b.iter(|| {
         replication::replicate_estimates(
             black_box(estimates::correlation),
             black_box(&x),
