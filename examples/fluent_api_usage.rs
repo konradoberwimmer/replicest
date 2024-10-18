@@ -14,7 +14,7 @@ pub fn main() {
     analysis.mean().set_wgts(&wgts);
     println!("{}", analysis.summary());
 
-    let mut analysis2 = analysis.copy();
+    let analysis2 = analysis.copy();
     println!("{}", analysis2.summary());
 
     let new_wgts = dvector![2.1, 2.5, 2.3, 2.7, 2.7, 2.0];

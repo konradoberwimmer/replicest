@@ -4,6 +4,7 @@ use std::thread;
 use crate::estimates;
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct ReplicatedEstimates {
     parameter_names: Vec<String>,
     final_estimates: DVector<f64>,
