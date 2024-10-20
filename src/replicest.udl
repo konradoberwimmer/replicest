@@ -1,3 +1,22 @@
 namespace replicest {
-        string to_upper_case([ByRef] string text);
+        ReplicatedEstimates replicate_estimates(
+                Estimate estimate,
+                [ByRef] sequence<sequence<sequence<double>>> x,
+                [ByRef] sequence<double> wgt,
+                [ByRef] sequence<sequence<double>> replicate_wgts,
+                double factor
+        );
+};
+
+enum Estimate {
+        "Mean",
+        "Correlation"
+};
+
+dictionary ReplicatedEstimates {
+        sequence<string> parameter_names;
+        sequence<double> final_estimates;
+        sequence<double> sampling_variances;
+        sequence<double> imputation_variances;
+        sequence<double> standard_errors;
 };
