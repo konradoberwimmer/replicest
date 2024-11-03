@@ -3,6 +3,7 @@ pub mod replication;
 pub mod helper;
 pub mod external;
 pub mod analysis;
+pub mod errors;
 
 pub use external::*;
 
