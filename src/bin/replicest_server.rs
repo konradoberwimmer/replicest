@@ -70,8 +70,32 @@ fn trim_buffer(buffer: &[u8]) -> String {
 fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<u8>, Box<dyn Error>> {
     match message.as_str() {
         str if str.starts_with("data") => {
-            todo!();
-            Ok(b"received data".try_into().unwrap())
+            let message_arguments = parse_data_message(&str);
+
+            match message_arguments {
+                None => {
+                    Ok(b"bad request - usage: data <number_imputations> <number_columns>".try_into().unwrap())
+                }
+                Some((number_imputations, number_columns)) => {
+                    let mut data : Vec<DMatrix<f64>> = Vec::new();
+
+                    for _ in 0..number_imputations {
+                        data.push(listen_for_data(data_socket, number_columns)?);
+                    }
+
+                    match number_imputations {
+                        1 => {
+                            analysis.for_data(Imputation::No(&data[0]));
+                        }
+                        _ => {
+                            let imp_data : Vec<&DMatrix<f64>> = Vec::from_iter(data.iter().map(|v| v));
+                            analysis.for_data(Imputation::Yes(&imp_data));
+                        }
+                    }
+
+                    Ok(b"received data".try_into().unwrap())
+                }
+            }
         }
         "weights" => {
             let data = listen_for_data(data_socket, 1)?;
@@ -89,6 +113,19 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
         }
         _ => {
             Ok(b"unknown".try_into().unwrap())
+        }
+    }
+}
+
+fn parse_data_message(message: &str) -> Option<(usize, usize)> {
+    let message_components : Vec<&str> = message.split(" ").collect();
+
+    match message_components.as_slice() {
+        [_, number_imputations, number_columns] if number_imputations.parse::<usize>().is_ok() && number_columns.parse::<usize>().is_ok() => {
+            Some((number_imputations.parse::<usize>().unwrap(), number_columns.parse::<usize>().unwrap()))
+        }
+        _ => {
+            None
         }
     }
 }
@@ -319,6 +356,80 @@ mod tests {
         let _ = client.write_all(&bytes);
 
         drop(client);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_parse_data_message() {
+        let wrong_message = "data";
+        assert!(parse_data_message(wrong_message).is_none());
+
+        let wrong_message = "data a 1";
+        assert!(parse_data_message(wrong_message).is_none());
+
+        let message = "data 5 15";
+        let result = parse_data_message(message);
+
+        assert!(result.is_some());
+        assert_eq!((5, 15), result.unwrap());
+    }
+
+    #[test]
+    fn test_handle_message_data_without_imputation() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_message_data_without_imputation".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let handle = thread::spawn(move || {
+            let mut current_analysis = analysis();
+            let return_value = handle_message("data 1 3".to_string(), &mut current_analysis, &data_socket);
+            assert!(return_value.is_ok());
+            assert_eq!(Vec::from(b"received data"), return_value.unwrap());
+            assert_eq!("none (1 datasets with 2 cases; wgt missing)", current_analysis.summary());
+        });
+
+        thread::sleep(Duration::from_millis(200));
+
+        let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_data_without_imputation").unwrap();
+
+        let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
+        let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
+        let bytes = Vec::from(bytes.as_flattened());
+
+        let _ = client.write_all(&bytes);
+
+        drop(client);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_handle_message_data_with_imputation() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_message_data_with_imputation".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let handle = thread::spawn(move || {
+            let mut current_analysis = analysis();
+            let return_value = handle_message("data 2 3".to_string(), &mut current_analysis, &data_socket);
+            assert!(return_value.is_ok());
+            assert_eq!(Vec::from(b"received data"), return_value.unwrap());
+            assert_eq!("none (2 datasets with 2 cases; wgt missing)", current_analysis.summary());
+        });
+
+        thread::sleep(Duration::from_millis(200));
+
+        for _ in 0..2 {
+            let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_data_with_imputation").unwrap();
+
+            let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
+            let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
+            let bytes = Vec::from(bytes.as_flattened());
+
+            let _ = client.write_all(&bytes);
+
+            drop(client);
+        }
+
         handle.join().unwrap();
     }
 }
