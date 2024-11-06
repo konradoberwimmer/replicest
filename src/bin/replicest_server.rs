@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::remove_file;
 use std::io::Read;
@@ -6,6 +7,7 @@ use nalgebra::{DMatrix, DVector};
 use users::get_current_uid;
 use replicest::analysis::*;
 use replicest::errors::DataLengthError;
+use replicest::replication::ReplicatedEstimates;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let (message_socket, data_socket) = setup_sockets()?;
@@ -74,7 +76,7 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
 
             match message_arguments {
                 None => {
-                    Ok(b"bad request - usage: data <number_imputations> <number_columns>".try_into().unwrap())
+                    Ok(b"bad request - usage: data <number_imputations> <number_columns>".into())
                 }
                 Some((number_imputations, number_columns)) => {
                     let mut data : Vec<DMatrix<f64>> = Vec::new();
@@ -93,7 +95,7 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
                         }
                     }
 
-                    Ok(b"received data".try_into().unwrap())
+                    Ok(b"received data".into())
                 }
             }
         }
@@ -101,18 +103,25 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
             let data = listen_for_data(data_socket, 1)?;
             let weight_vector : DVector<f64> = DVector::<f64>::from_iterator(data.nrows(), data.iter().map(|v| v.clone()));
             analysis.set_wgts(&weight_vector);
-            Ok(b"received weights".try_into().unwrap())
+            Ok(b"received weights".into())
         }
         "mean" => {
             analysis.mean();
-            Ok(b"set analysis to mean".try_into().unwrap())
+            Ok(b"set analysis to mean".into())
         }
         "calculate" => {
-            todo!();
-            Ok(b"".try_into().unwrap())
+            let result = analysis.calculate();
+            match result {
+                Ok(_) => {
+                    Ok(b"calculation complete".try_into().unwrap())
+                }
+                Err(err) => {
+                    Ok([b"error calculating: ", err.to_string().as_bytes()].concat().into())
+                }
+            }
         }
         _ => {
-            Ok(b"unknown".try_into().unwrap())
+            Ok(b"unknown".into())
         }
     }
 }
@@ -178,7 +187,7 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
-    use nalgebra::{dmatrix};
+    use nalgebra::{dmatrix, dvector};
 
     #[test]
     #[serial]
@@ -431,5 +440,57 @@ mod tests {
         }
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_handle_message_calculate_with_error() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_message_calculate_with_error".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let mut current_analysis = analysis();
+        current_analysis.mean();
+
+        let return_value = handle_message("calculate".to_string(), &mut current_analysis, &data_socket);
+
+        assert!(return_value.is_ok());
+        assert_eq!(Vec::from(b"error calculating: Analysis is missing some element: data"), return_value.unwrap());
+    }
+
+    #[test]
+    fn test_handle_message_calculate() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_message_calculate".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
+        let data0 = DMatrix::from_row_slice(3, 4, &[
+            1.0, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.0, -2.5,
+            3.0, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data0);
+        let data1 = DMatrix::from_row_slice(3, 4, &[
+            1.2, 4.0, 2.5, -1.0,
+            2.5, 1.75, 3.9, -2.5,
+            2.7, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data1);
+        let data2 = DMatrix::from_row_slice(3, 4, &[
+            0.8, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.1, -2.5,
+            3.3, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data2);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        let mut current_analysis = analysis();
+        current_analysis.for_data(Imputation::Yes(&imp_data)).set_wgts(&wgt).mean();
+
+        let return_value = handle_message("calculate".to_string(), &mut current_analysis, &data_socket);
+
+        assert!(return_value.is_ok());
+        assert_eq!(Vec::from(b"calculation complete"), return_value.unwrap());
     }
 }
