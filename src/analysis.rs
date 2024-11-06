@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::ops::Deref;
 use std::rc::Rc;
 use nalgebra::{DMatrix, DVector};
+use crate::errors::{InconsistencyError, MissingElementError};
 use crate::estimates;
 use crate::replication::{replicate_estimates, ReplicatedEstimates};
 
@@ -56,10 +58,14 @@ impl Analysis {
         self
     }
 
-    pub fn calculate(&mut self) -> HashMap<Vec<String>, ReplicatedEstimates> {
-        assert!(self.x.is_some(), "no data provided for analysis");
-        assert!(self.x.as_ref().unwrap().deref().len() > 0, "no data provided for analysis");
-        assert!(self.estimate.is_some(), "no estimate set for analysis");
+    pub fn calculate(&mut self) -> Result<HashMap<Vec<String>, ReplicatedEstimates>, Box<dyn Error>> {
+        if self.x.is_none() || self.x.as_ref().unwrap().deref().len() == 0 {
+            return Err(Box::new(MissingElementError::new("data")))
+        }
+
+        if self.estimate.is_none() {
+            return Err(Box::new(MissingElementError::new("estimate")))
+        }
 
         let mut x : Vec<&DMatrix<f64>> = Vec::new();
         for mat in self.x.as_ref().unwrap().deref() {
@@ -69,8 +75,9 @@ impl Analysis {
         let ncases = x[0].nrows();
 
         if self.wgt.is_some() {
-            assert_eq!(ncases, self.wgt.as_ref().unwrap().nrows(),
-                       "unequal number of rows for data and weights");
+            if ncases != self.wgt.as_ref().unwrap().nrows() {
+                return Err(Box::new(InconsistencyError::new("unequal number of rows for data and weights")))
+            }
         } else {
             self.wgt = Some(Rc::new(DVector::<f64>::from_element(ncases, 1.0)));
         };
@@ -90,7 +97,7 @@ impl Analysis {
 
         results.insert(key, result);
 
-        results
+        Ok(results)
     }
 
     pub fn summary(&self) -> String {
@@ -174,21 +181,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "no data provided for analysis")]
     fn test_calculate_does_not_work_without_data() {
         let mut analysis1 = analysis();
-        analysis1.calculate();
-    }
+        let result = analysis1.calculate();
 
-    #[test]
-    #[should_panic(expected = "no data provided for analysis")]
-    fn test_calculate_does_not_work_with_zero_data() {
+        assert!(result.is_err());
+        assert_eq!("Analysis is missing some element: data", result.err().unwrap().deref().to_string());
+
         let mut analysis1 = analysis();
-        analysis1.for_data(Imputation::Yes(&Vec::<&DMatrix<f64>>::new())).calculate();
+        let result = analysis1.for_data(Imputation::Yes(&Vec::<&DMatrix<f64>>::new())).calculate();
+
+        assert!(result.is_err());
+        assert_eq!("Analysis is missing some element: data", result.err().unwrap().deref().to_string());
     }
 
     #[test]
-    #[should_panic(expected = "no estimate set for analysis")]
     fn test_calculate_does_not_work_without_estimate() {
         let data = dmatrix![
             537.0, 456.2, 501.7;
@@ -197,11 +204,13 @@ mod tests {
         ];
 
         let mut analysis1 = analysis();
-        analysis1.for_data(Imputation::No(&data)).calculate();
+        let result = analysis1.for_data(Imputation::No(&data)).calculate();
+
+        assert!(result.is_err());
+        assert_eq!("Analysis is missing some element: estimate", result.err().unwrap().deref().to_string());
     }
 
     #[test]
-    #[should_panic(expected = "unequal number of rows for data and weights")]
     fn test_calculate_does_not_work_with_unequal_rows_between_data_and_weights() {
         let data = dmatrix![
             537.0, 456.2, 501.7;
@@ -212,7 +221,10 @@ mod tests {
         let wgt = dvector![1.0, 2.0];
 
         let mut analysis1 = analysis();
-        analysis1.for_data(Imputation::No(&data)).set_wgts(&wgt).mean().calculate();
+        let result = analysis1.for_data(Imputation::No(&data)).set_wgts(&wgt).mean().calculate();
+
+        assert!(result.is_err());
+        assert_eq!("Inconsistency in analysis: unequal number of rows for data and weights", result.err().unwrap().deref().to_string());
     }
 
     #[test]
@@ -225,6 +237,9 @@ mod tests {
 
         let mut analysis1 = analysis();
         let result = analysis1.for_data(Imputation::No(&data)).mean().calculate();
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
 
         assert_eq!(1, result.len());
         assert_eq!(3, result[&vec!["overall".to_string()]].final_estimates().len());
@@ -258,6 +273,9 @@ mod tests {
 
         let mut analysis1 = analysis();
         let result = analysis1.for_data(Imputation::Yes(&imp_data)).set_wgts(&wgt).mean().calculate();
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
 
         assert_eq!(1, result.len());
         let first_result = result[&vec!["overall".to_string()]].clone();
@@ -340,11 +358,11 @@ mod tests {
 
         let mut analysis2 = analysis1.copy();
 
-        assert_eq!(1, analysis1.calculate().len());
-        assert_eq!(1, analysis2.calculate().len());
+        assert_eq!(1, analysis1.calculate().unwrap().len());
+        assert_eq!(1, analysis2.calculate().unwrap().len());
 
         let mut analysis3 = analysis1.copy();
 
-        assert_eq!(1, analysis3.calculate().len());
+        assert_eq!(1, analysis3.calculate().unwrap().len());
     }
 }

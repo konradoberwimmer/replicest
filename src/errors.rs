@@ -25,3 +25,53 @@ impl Error for DataLengthError {
         &self.details
     }
 }
+
+#[derive(Debug)]
+pub struct MissingElementError {
+    details: String
+}
+
+impl MissingElementError {
+    pub fn new(what: &str) -> MissingElementError {
+        MissingElementError {
+            details: "Analysis is missing some element: ".to_owned() + what
+        }
+    }
+}
+
+impl Display for MissingElementError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for MissingElementError {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
+
+#[derive(Debug)]
+pub struct InconsistencyError {
+    details: String
+}
+
+impl InconsistencyError {
+    pub fn new(what: &str) -> InconsistencyError {
+        InconsistencyError {
+            details: "Inconsistency in analysis: ".to_owned() + what
+        }
+    }
+}
+
+impl Display for InconsistencyError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for InconsistencyError {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
