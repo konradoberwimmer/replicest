@@ -7,7 +7,7 @@ use nalgebra::{DMatrix, DVector};
 use users::get_current_uid;
 use replicest::analysis::*;
 use replicest::errors::DataLengthError;
-use replicest::replication::ReplicatedEstimates;
+use replicest::ReplicatedEstimates;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let (message_socket, data_socket) = setup_sockets()?;
@@ -32,8 +32,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     let response = handle_message(message, &mut current_analysis, &data_socket);
                     match response {
-                        Ok(response_data) => {
-                            message_socket.send_to_addr(&response_data, &client_addr)?;
+                        Ok(responses) => {
+                            for response_data in responses {
+                                message_socket.send_to_addr(&response_data, &client_addr)?;
+                            }
                         }
                         Err(err) => {
                             message_socket.send_to_addr(format!("error: {}", err).as_bytes(), &client_addr)?;
@@ -69,14 +71,14 @@ fn trim_buffer(buffer: &[u8]) -> String {
     message.trim_end().to_string()
 }
 
-fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<u8>, Box<dyn Error>> {
+fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     match message.as_str() {
         str if str.starts_with("data") => {
             let message_arguments = parse_data_message(&str);
 
             match message_arguments {
                 None => {
-                    Ok(b"bad request - usage: data <number_imputations> <number_columns>".into())
+                    Ok(vec!(b"bad request - usage: data <number_imputations> <number_columns>".into()))
                 }
                 Some((number_imputations, number_columns)) => {
                     let mut data : Vec<DMatrix<f64>> = Vec::new();
@@ -95,7 +97,7 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
                         }
                     }
 
-                    Ok(b"received data".into())
+                    Ok(vec!(b"received data".into()))
                 }
             }
         }
@@ -103,25 +105,38 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
             let data = listen_for_data(data_socket, 1)?;
             let weight_vector : DVector<f64> = DVector::<f64>::from_iterator(data.nrows(), data.iter().map(|v| v.clone()));
             analysis.set_wgts(&weight_vector);
-            Ok(b"received weights".into())
+            Ok(vec!(b"received weights".into()))
         }
         "mean" => {
             analysis.mean();
-            Ok(b"set analysis to mean".into())
+            Ok(vec!(b"set analysis to mean".into()))
         }
         "calculate" => {
             let result = analysis.calculate();
             match result {
-                Ok(_) => {
-                    Ok(b"calculation complete".try_into().unwrap())
+                Ok(result_data) => {
+                    let mut result_data_external : HashMap<Vec<String>, ReplicatedEstimates> = HashMap::new();
+                    for (key, value) in result_data.iter() {
+                        result_data_external.insert(key.clone(), ReplicatedEstimates::from_internal(value));
+                    }
+                    let serialization = rmp_serde::to_vec(&result_data_external);
+
+                    match serialization {
+                        Ok(serialized_data) => {
+                            Ok(vec!(b"calculation complete".try_into().unwrap(), serialized_data))
+                        }
+                        Err(err) => {
+                            Ok(vec!([b"error serializing calculation result: ", err.to_string().as_bytes()].concat().into()))
+                        }
+                    }
                 }
                 Err(err) => {
-                    Ok([b"error calculating: ", err.to_string().as_bytes()].concat().into())
+                    Ok(vec!([b"error calculating: ", err.to_string().as_bytes()].concat().into()))
                 }
             }
         }
         _ => {
-            Ok(b"unknown".into())
+            Ok(vec!(b"unknown".into()))
         }
     }
 }
@@ -350,7 +365,7 @@ mod tests {
             let mut current_analysis = analysis();
             let return_value = handle_message("weights".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
-            assert_eq!(Vec::from(b"received weights"), return_value.unwrap());
+            assert_eq!(Vec::from(b"received weights"), return_value.unwrap()[0]);
             assert_eq!("none (no data; 6 weights of sum 30.540000000000003)", current_analysis.summary());
         });
 
@@ -393,7 +408,7 @@ mod tests {
             let mut current_analysis = analysis();
             let return_value = handle_message("data 1 3".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
-            assert_eq!(Vec::from(b"received data"), return_value.unwrap());
+            assert_eq!(Vec::from(b"received data"), return_value.unwrap()[0]);
             assert_eq!("none (1 datasets with 2 cases; wgt missing)", current_analysis.summary());
         });
 
@@ -421,7 +436,7 @@ mod tests {
             let mut current_analysis = analysis();
             let return_value = handle_message("data 2 3".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
-            assert_eq!(Vec::from(b"received data"), return_value.unwrap());
+            assert_eq!(Vec::from(b"received data"), return_value.unwrap()[0]);
             assert_eq!("none (2 datasets with 2 cases; wgt missing)", current_analysis.summary());
         });
 
@@ -454,7 +469,7 @@ mod tests {
         let return_value = handle_message("calculate".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
-        assert_eq!(Vec::from(b"error calculating: Analysis is missing some element: data"), return_value.unwrap());
+        assert_eq!(Vec::from(b"error calculating: Analysis is missing some element: data"), return_value.unwrap()[0]);
     }
 
     #[test]
@@ -491,6 +506,31 @@ mod tests {
         let return_value = handle_message("calculate".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
-        assert_eq!(Vec::from(b"calculation complete"), return_value.unwrap());
+
+        let responses = return_value.unwrap();
+        assert_eq!(2, responses.len());
+        assert_eq!(Vec::from(b"calculation complete"), responses[0]);
+
+        let result_data = &responses[1];
+        let result = rmp_serde::from_slice::<HashMap<Vec<String>, ReplicatedEstimates>>(result_data.as_slice());
+        assert!(result.is_ok());
+
+        let replicated_estimates = result.unwrap();
+        assert_eq!(1, replicated_estimates.len());
+        assert_eq!(&vec!("overall".to_string()), replicated_estimates.keys().next().unwrap());
+
+        let overall_estimates = replicated_estimates.get(&vec!("overall".to_string())).unwrap();
+        assert_eq!(4, overall_estimates.parameter_names.len());
+        assert_eq!("mean_x2", overall_estimates.parameter_names[1]);
+
+        let expected_final_estimates = vec![2.25, 3.125, 2.0, -2.5];
+        let expected_imputation_variances = vec![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0];
+
+        for (i, value) in expected_final_estimates.iter().enumerate() {
+            assert!(overall_estimates.final_estimates[i] - value < 1e-10);
+        }
+        for (i, value) in expected_imputation_variances.iter().enumerate() {
+            assert!(overall_estimates.imputation_variances[i] - value < 1e-10);
+        }
     }
 }

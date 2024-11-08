@@ -1,4 +1,5 @@
 use nalgebra::{DMatrix, DVector, Dyn, Matrix, U1};
+use serde::{Deserialize, Serialize};
 use crate::{estimates, replication};
 
 pub enum Estimate {
@@ -6,12 +7,25 @@ pub enum Estimate {
     Correlation,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ReplicatedEstimates {
     pub parameter_names: Vec<String>,
     pub final_estimates: Vec<f64>,
     pub sampling_variances: Vec<f64>,
     pub imputation_variances: Vec<f64>,
     pub standard_errors: Vec<f64>,
+}
+
+impl ReplicatedEstimates {
+    pub fn from_internal(internal_struct: &replication::ReplicatedEstimates) -> ReplicatedEstimates {
+        ReplicatedEstimates {
+            parameter_names: internal_struct.parameter_names().clone(),
+            final_estimates: Vec::from(internal_struct.final_estimates().as_slice()),
+            sampling_variances: Vec::from(internal_struct.sampling_variances().as_slice()),
+            imputation_variances: Vec::from(internal_struct.imputation_variances().as_slice()),
+            standard_errors: Vec::from(internal_struct.standard_errors().as_slice()),
+        }
+    }
 }
 
 pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec<f64>, replicate_wgts: &Vec<Vec<f64>>, factor: f64) -> ReplicatedEstimates {
@@ -44,13 +58,7 @@ pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec
         factor
     );
 
-    ReplicatedEstimates {
-        parameter_names: result.parameter_names().clone(),
-        final_estimates: Vec::from(result.final_estimates().as_slice()),
-        sampling_variances: Vec::from(result.sampling_variances().as_slice()),
-        imputation_variances: Vec::from(result.imputation_variances().as_slice()),
-        standard_errors: Vec::from(result.standard_errors().as_slice()),
-    }
+    ReplicatedEstimates::from_internal(&result)
 }
 
 #[cfg(test)]
