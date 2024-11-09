@@ -15,6 +15,8 @@ pub enum Imputation<'a> {
 pub struct Analysis {
     x: Option<Rc<Vec<DMatrix<f64>>>>,
     wgt: Option<Rc<DVector<f64>>>,
+    repwgts: Option<Rc<DMatrix<f64>>>,
+    variance_adjustment_factor: f64,
     estimate_name: Option<String>,
     estimate: Option<fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates>,
 }
@@ -23,6 +25,8 @@ pub fn analysis() -> Analysis {
     Analysis {
         x: None,
         wgt: None,
+        repwgts: None,
+        variance_adjustment_factor: 1.0,
         estimate_name: None,
         estimate: None,
     }
@@ -47,8 +51,18 @@ impl Analysis {
         self
     }
 
-    pub fn set_wgts(&mut self, wgt: &DVector<f64>) -> &mut Self {
+    pub fn set_weights(&mut self, wgt: &DVector<f64>) -> &mut Self {
         self.wgt = Some(Rc::new(wgt.clone()));
+        self
+    }
+
+    pub fn with_replicate_weights(&mut self, replicate_weights: &DMatrix<f64>) -> &mut Self {
+        self.repwgts = Some(Rc::new(replicate_weights.clone()));
+        self
+    }
+
+    pub fn set_variance_adjustment_factor(&mut self, variance_adjustment_factor: f64) -> &mut Self {
+        self.variance_adjustment_factor = variance_adjustment_factor;
         self
     }
 
@@ -82,14 +96,22 @@ impl Analysis {
             self.wgt = Some(Rc::new(DVector::<f64>::from_element(ncases, 1.0)));
         };
 
+        if self.repwgts.is_some() {
+            if ncases != self.repwgts.as_ref().unwrap().nrows() {
+                return Err(Box::new(InconsistencyError::new("unequal number of rows for data and replicate weights")))
+            }
+        } else {
+            self.repwgts = Some(Rc::new(DMatrix::<f64>::from_row_slice(ncases, 0, &[])))
+        }
+
         let mut results : HashMap<Vec<String>, ReplicatedEstimates> = HashMap::new();
 
         let result = replicate_estimates(
             self.estimate.as_ref().unwrap().clone(),
             &x,
             self.wgt.as_ref().unwrap().deref(),
-            &DMatrix::from_row_slice(ncases, 0, &[]),
-            1.0
+            self.repwgts.as_ref().unwrap().deref(),
+            self.variance_adjustment_factor,
         );
 
         let mut key : Vec<String> = Vec::new();
@@ -117,13 +139,28 @@ impl Analysis {
             format!("{} weights of sum {}", wgts.len(), wgts.sum())
         };
 
-        estimate_name + " (" + &data_info + "; " + &wgt_info + ")"
+        let factor_info = if self.variance_adjustment_factor == 1.0 {
+            "".to_string()
+        } else {
+            format!(", factor {}", self.variance_adjustment_factor)
+        };
+
+        let repwgt_info = if self.repwgts.is_none() {
+            "no replicate weights".to_string()
+        } else {
+            let repwgts = self.repwgts.as_ref().unwrap().deref();
+            format!("{} replicate weights{}", repwgts.ncols(), factor_info)
+        };
+
+        estimate_name + " (" + &data_info + "; " + &wgt_info + "; " + &repwgt_info + ")"
     }
 
     pub fn copy(&self) -> Analysis {
         Analysis {
             x: self.x.clone(),
             wgt: self.wgt.clone(),
+            repwgts: self.repwgts.clone(),
+            variance_adjustment_factor: self.variance_adjustment_factor,
             estimate_name: self.estimate_name.clone(),
             estimate: self.estimate.clone(),
         }
@@ -146,7 +183,7 @@ mod tests {
         let mut analysis1 = analysis();
         analysis1.for_data(Imputation::No(&data1));
 
-        assert_eq!("none (1 datasets with 3 cases; wgt missing)", analysis1.summary());
+        assert_eq!("none (1 datasets with 3 cases; wgt missing; no replicate weights)", analysis1.summary());
 
         let data2imp1 = dmatrix![
             537.0, 456.2, 501.7;
@@ -174,7 +211,7 @@ mod tests {
         let mut analysis2 = analysis();
         analysis2.for_data(Imputation::Yes(&data2));
 
-        assert_eq!("none (3 datasets with 4 cases; wgt missing)", analysis2.summary());
+        assert_eq!("none (3 datasets with 4 cases; wgt missing; no replicate weights)", analysis2.summary());
         assert_eq!(3, data1.nrows());
         assert_eq!(3, data2.len());
         assert_eq!(4, data2[0].nrows());
@@ -221,7 +258,7 @@ mod tests {
         let wgt = dvector![1.0, 2.0];
 
         let mut analysis1 = analysis();
-        let result = analysis1.for_data(Imputation::No(&data)).set_wgts(&wgt).mean().calculate();
+        let result = analysis1.for_data(Imputation::No(&data)).set_weights(&wgt).mean().calculate();
 
         assert!(result.is_err());
         assert_eq!("Inconsistency in analysis: unequal number of rows for data and weights", result.err().unwrap().deref().to_string());
@@ -248,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_works_for_mean() {
+    fn test_calculate_works_for_mean_without_resampling() {
         let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
         let data0 = DMatrix::from_row_slice(3, 4, &[
             1.0, 4.0, 2.5, -1.0,
@@ -272,7 +309,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
 
         let mut analysis1 = analysis();
-        let result = analysis1.for_data(Imputation::Yes(&imp_data)).set_wgts(&wgt).mean().calculate();
+        let result = analysis1.for_data(Imputation::Yes(&imp_data)).set_weights(&wgt).mean().calculate();
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -288,29 +325,82 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_works_for_mean_with_resampling() {
+        let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
+        let data0 = DMatrix::from_row_slice(3, 4, &[
+            1.0, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.0, -2.5,
+            3.0, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data0);
+        let data1 = DMatrix::from_row_slice(3, 4, &[
+            1.2, 4.0, 2.5, -1.0,
+            2.5, 1.75, 3.9, -2.5,
+            2.7, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data1);
+        let data2 = DMatrix::from_row_slice(3, 4, &[
+            0.8, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.1, -2.5,
+            3.3, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data2);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+        let rep_wgts = DMatrix::from_row_slice(3, 6, &[
+            0.0, 1.0, 1.0, 0.0, 1.0, 1.0,
+            0.5, 0.0, 0.5, 0.5, 0.0, 0.5,
+            1.5, 1.5, 0.0, 1.5, 1.5, 0.0,
+        ]);
+
+        let mut analysis = analysis();
+        let result =
+            analysis
+                .for_data(Imputation::Yes(&imp_data))
+                .set_weights(&wgt)
+                .with_replicate_weights(&rep_wgts)
+                .set_variance_adjustment_factor(0.5)
+                .mean()
+                .calculate();
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        assert_eq!(1, result.len());
+        let first_result = result[&vec!["overall".to_string()]].clone();
+
+        assert_eq!(4, first_result.parameter_names().len());
+        assert_eq!("mean_x2", first_result.parameter_names()[1]);
+        assert_eq!(0, (first_result.final_estimates() - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (first_result.sampling_variances() - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (first_result.imputation_variances() - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (first_result.standard_errors() - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v.abs() > 1e-10).count());
+    }
+
+    #[test]
     fn test_copying() {
         let wgts = dvector![1.1, 1.5, 1.3, 1.7, 1.7, 1.0];
 
         let mut base_analysis = analysis();
-        base_analysis.set_wgts(&wgts);
+        base_analysis.set_weights(&wgts);
 
         let mut analysis1 = base_analysis.copy();
         analysis1.mean();
 
-        assert_eq!("none (no data; 6 weights of sum 8.3)", base_analysis.summary());
-        assert_eq!("mean (no data; 6 weights of sum 8.3)", analysis1.summary());
+        assert_eq!("none (no data; 6 weights of sum 8.3; no replicate weights)", base_analysis.summary());
+        assert_eq!("mean (no data; 6 weights of sum 8.3; no replicate weights)", analysis1.summary());
         assert_eq!(2, Rc::strong_count(base_analysis.wgt.as_ref().unwrap()));
 
         let new_wgts = dvector![2.1, 2.5, 2.3, 2.7, 2.7, 2.0];
-        analysis1.set_wgts(&new_wgts);
+        analysis1.set_weights(&new_wgts);
 
-        assert_eq!("none (no data; 6 weights of sum 8.3)", base_analysis.summary());
-        assert_eq!("mean (no data; 6 weights of sum 14.3)", analysis1.summary());
+        assert_eq!("none (no data; 6 weights of sum 8.3; no replicate weights)", base_analysis.summary());
+        assert_eq!("mean (no data; 6 weights of sum 14.3; no replicate weights)", analysis1.summary());
         assert_eq!(1, Rc::strong_count(base_analysis.wgt.as_ref().unwrap()));
 
         let mut analysis2 = analysis1.copy();
 
-        assert_eq!("mean (no data; 6 weights of sum 14.3)", analysis2.summary());
+        assert_eq!("mean (no data; 6 weights of sum 14.3; no replicate weights)", analysis2.summary());
         assert_eq!(2, Rc::strong_count(analysis2.wgt.as_ref().unwrap()));
 
         let data = dmatrix![
@@ -321,10 +411,10 @@ mod tests {
         analysis2.for_data(Imputation::No(&data));
         let analysis3 = analysis2.copy();
 
-        assert_eq!("mean (1 datasets with 3 cases; 6 weights of sum 14.3)", analysis3.summary());
+        assert_eq!("mean (1 datasets with 3 cases; 6 weights of sum 14.3; no replicate weights)", analysis3.summary());
         assert_eq!(3, Rc::strong_count(analysis2.wgt.as_ref().unwrap()));
 
-        analysis1.set_wgts(&wgts);
+        analysis1.set_weights(&wgts);
 
         assert_eq!(2, Rc::strong_count(analysis2.wgt.as_ref().unwrap()));
     }
@@ -354,7 +444,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
 
         let mut analysis1 = analysis();
-        analysis1.for_data(Imputation::Yes(&imp_data)).set_wgts(&wgt).mean();
+        analysis1.for_data(Imputation::Yes(&imp_data)).set_weights(&wgt).mean();
 
         let mut analysis2 = analysis1.copy();
 

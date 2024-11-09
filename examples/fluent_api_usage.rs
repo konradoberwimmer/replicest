@@ -8,10 +8,10 @@ pub fn main() {
 
     let mut analysis = analysis::analysis();
 
-    analysis.set_wgts(&wgts).mean();
+    analysis.set_weights(&wgts).mean();
     println!("{}", analysis.summary());
 
-    analysis.mean().set_wgts(&wgts);
+    analysis.mean().set_weights(&wgts);
     println!("{}", analysis.summary());
 
     let analysis2 = analysis.copy();
@@ -19,7 +19,7 @@ pub fn main() {
 
     let new_wgts = dvector![2.1, 2.5, 2.3, 2.7, 2.7, 2.0];
 
-    analysis.set_wgts(&new_wgts);
+    analysis.set_weights(&new_wgts);
     println!("{}", analysis.summary());
     println!("{}", analysis2.summary());
 }
