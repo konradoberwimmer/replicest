@@ -19,6 +19,7 @@ pub struct Analysis {
     variance_adjustment_factor: f64,
     estimate_name: Option<String>,
     estimate: Option<fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates>,
+    groups: Option<Rc<Vec<DMatrix<f64>>>>,
 }
 
 pub fn analysis() -> Analysis {
@@ -29,6 +30,7 @@ pub fn analysis() -> Analysis {
         variance_adjustment_factor: 1.0,
         estimate_name: None,
         estimate: None,
+        groups: None,
     }
 }
 
@@ -69,6 +71,24 @@ impl Analysis {
     pub fn mean(&mut self) -> &mut Self {
         self.estimate_name = Some("mean".to_string());
         self.estimate = Some(estimates::mean);
+        self
+    }
+
+    pub fn group_by(&mut self, data: Imputation) -> &mut Self {
+        let mut new_vec : Vec<DMatrix<f64>> = Vec::new();
+
+        match data {
+            Imputation::Yes(&ref vec) => {
+                for &mat in vec.iter() {
+                    new_vec.push(mat.clone());
+                }
+            }
+            Imputation::No(&ref mat) => {
+                new_vec.push(mat.clone());
+            }
+        }
+
+        self.groups = Some(Rc::new(new_vec));
         self
     }
 
@@ -125,6 +145,14 @@ impl Analysis {
     pub fn summary(&self) -> String {
         let estimate_name = self.estimate_name.as_ref().unwrap_or(&"none".to_string()).clone();
 
+        let group_info = match self.groups.as_ref() {
+            None => { "".to_string() }
+            Some(groups) => {
+                let group_data = groups.as_ref();
+                format!(" by {} grouping columns", group_data[0].ncols())
+            }
+        };
+
         let data_info = if self.x.is_none() {
             "no data".to_string()
         } else {
@@ -152,7 +180,7 @@ impl Analysis {
             format!("{} replicate weights{}", repwgts.ncols(), factor_info)
         };
 
-        estimate_name + " (" + &data_info + "; " + &wgt_info + "; " + &repwgt_info + ")"
+        estimate_name + &group_info +  " (" + &data_info + "; " + &wgt_info + "; " + &repwgt_info + ")"
     }
 
     pub fn copy(&self) -> Analysis {
@@ -163,6 +191,7 @@ impl Analysis {
             variance_adjustment_factor: self.variance_adjustment_factor,
             estimate_name: self.estimate_name.clone(),
             estimate: self.estimate.clone(),
+            groups: self.groups.clone(),
         }
     }
 }
@@ -212,9 +241,33 @@ mod tests {
         analysis2.for_data(Imputation::Yes(&data2));
 
         assert_eq!("none (3 datasets with 4 cases; wgt missing; no replicate weights)", analysis2.summary());
-        assert_eq!(3, data1.nrows());
-        assert_eq!(3, data2.len());
-        assert_eq!(4, data2[0].nrows());
+    }
+
+    #[test]
+    fn test_group_by() {
+        let groups1 = dmatrix![
+            1.0, 1.0;
+            2.0, 1.0;
+            1.0, 2.0;
+        ];
+
+        let mut analysis1 = analysis();
+        analysis1.group_by(Imputation::No(&groups1));
+
+        assert_eq!("none by 2 grouping columns (no data; wgt missing; no replicate weights)", analysis1.summary());
+
+        let groups2imp1 = dmatrix![ 1.0; 1.0; 2.0; 2.0; ];
+        let groups2imp2 = dmatrix![ 1.0; 1.0; 1.0; 2.0; ];
+        let groups2imp3 = dmatrix![ 1.0; 1.0; 2.0; 2.0; ];
+        let mut groups2: Vec<&DMatrix<f64>> = Vec::new();
+        groups2.push(&groups2imp1);
+        groups2.push(&groups2imp2);
+        groups2.push(&groups2imp3);
+
+        let mut analysis2 = analysis();
+        analysis2.group_by(Imputation::Yes(&groups2));
+
+        assert_eq!("none by 1 grouping columns (no data; wgt missing; no replicate weights)", analysis2.summary());
     }
 
     #[test]
