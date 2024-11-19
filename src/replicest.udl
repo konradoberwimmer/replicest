@@ -2,8 +2,8 @@ namespace replicest {
         ReplicatedEstimates replicate_estimates(
                 Estimate estimate,
                 [ByRef] sequence<sequence<sequence<double>>> x,
-                [ByRef] sequence<double> wgt,
-                [ByRef] sequence<sequence<double>> replicate_wgts,
+                [ByRef] sequence<sequence<double>> wgt,
+                [ByRef] sequence<sequence<sequence<double>>> replicate_wgts,
                 double factor
         );
 };

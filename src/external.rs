@@ -28,7 +28,7 @@ impl ReplicatedEstimates {
     }
 }
 
-pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec<f64>, replicate_wgts: &Vec<Vec<f64>>, factor: f64) -> ReplicatedEstimates {
+pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec<Vec<f64>>, replicate_wgts: &Vec<Vec<Vec<f64>>>, factor: f64) -> ReplicatedEstimates {
     let estimate_function = match estimate {
         Estimate::Mean => { estimates::mean }
         Estimate::Correlation => { estimates::correlation }
@@ -45,16 +45,29 @@ pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec
     }
     let ref_data : Vec<&DMatrix<f64>> = Vec::from_iter(data.iter());
 
-    let mut rep_wgt_matrix : DMatrix<f64> = DMatrix::<f64>::zeros(replicate_wgts.len(), if replicate_wgts.len() == 0 { 0 } else { replicate_wgts[0].len() });
-    for (r, row) in replicate_wgts.into_iter().enumerate() {
-        rep_wgt_matrix.set_row(r, &Matrix::<f64, U1, Dyn, _>::from_row_slice(row));
+    let mut weights : Vec<DVector<f64>> = Vec::new();
+    for weight in wgt.iter() {
+        weights.push(DVector::<f64>::from_row_slice(&weight))
     }
+    let ref_weights : Vec<&DVector<f64>> = Vec::from_iter(weights.iter());
+
+    let mut replicate_weights : Vec<DMatrix<f64>> = Vec::new();
+    for replicate_weight in replicate_wgts.iter() {
+        let mut rep_wgt_matrix : DMatrix<f64> = DMatrix::<f64>::zeros(replicate_weight.len(), if replicate_weight.len() == 0 { 0 } else { replicate_weight[0].len() });
+        for (r, row) in replicate_weight.into_iter().enumerate() {
+            rep_wgt_matrix.set_row(r, &Matrix::<f64, U1, Dyn, _>::from_row_slice(row));
+        }
+
+        replicate_weights.push(rep_wgt_matrix);
+    }
+    let ref_replicate_weights : Vec<&DMatrix<f64>> = Vec::from_iter(replicate_weights.iter());
+
 
     let result = replication::replicate_estimates(
         estimate_function,
         &ref_data,
-        &DVector::<f64>::from_row_slice(&wgt),
-        &rep_wgt_matrix,
+        &ref_weights,
+        &ref_replicate_weights,
         factor
     );
 
@@ -92,7 +105,7 @@ mod tests {
             vec![1.5, 1.5, 0.0],
         ];
 
-        let result = replicate_estimates(Estimate::Mean, &imp_data, &wgt, &rep_wgts, 1.0);
+        let result = replicate_estimates(Estimate::Mean, &imp_data, &vec![wgt], &vec![rep_wgts], 1.0);
         assert_eq!(4, result.parameter_names.len());
         assert_eq!("mean_x2", result.parameter_names[1]);
 

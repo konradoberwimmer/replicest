@@ -35,7 +35,8 @@ impl ReplicatedEstimates {
     }
 }
 
-pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates, x: &Vec<&DMatrix<f64>>, wgt: &DVector<f64>, replicate_wgts: &DMatrix<f64>, factor: f64) -> ReplicatedEstimates {
+pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates, x: &Vec<&DMatrix<f64>>, weights: &Vec<&DVector<f64>>, replicate_wgts: &Vec<&DMatrix<f64>>, factor: f64) -> ReplicatedEstimates {
+    // TODO use multiple imputation (replicate weights)
     let mut parameter_names = Vec::<String>::new();
     let mut estimates = DMatrix::<f64>::zeros(0, 0);
     let mut sampling_variances = DVector::<f64>::zeros(0);
@@ -47,12 +48,12 @@ pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estima
             let transmitter1 = transmitter.clone();
 
             scope.spawn(move || {
-                let estimates_imputation = estimator(&data, &wgt);
+                let estimates_imputation = estimator(&data, &weights[0]);
 
-                let sampling_variances_imputation: DVector<f64> = if replicate_wgts.ncols() > 0 {
-                    let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(estimates_imputation.estimates().len(), replicate_wgts.ncols());
-                    for c in 0..replicate_wgts.ncols() {
-                        let estimates0 = estimator(&data, &DVector::from(replicate_wgts.column(c)));
+                let sampling_variances_imputation: DVector<f64> = if replicate_wgts.len() > 0 && replicate_wgts[0].ncols() > 0 {
+                    let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(estimates_imputation.estimates().len(), replicate_wgts[0].ncols());
+                    for c in 0..replicate_wgts[0].ncols() {
+                        let estimates0 = estimator(&data, &DVector::from(replicate_wgts[0].column(c)));
                         replicated_estimates.set_column(c, &estimates0.estimates());
                     }
 
@@ -133,7 +134,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 2.0/3.0);
+        let result = replicate_estimates(crate::estimates::mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
         assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_eq!(result.sampling_variances, dvector![0.6370833333333332, 0.18843749999999995, 0.815, 1.0416666666666665]);
         assert_eq!(result.imputation_variances, dvector![0.0, 0.0, 0.0, 0.0]);
@@ -165,7 +166,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
-        let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 1.0);
+        let result = replicate_estimates(crate::estimates::mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
         assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
         assert_eq!(0, (result.sampling_variances - dvector![0.0, 0.0, 0.0, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
         assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
@@ -201,7 +202,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 1.0);
+        let result = replicate_estimates(crate::estimates::mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
         assert_eq!(4, result.parameter_names.len());
         assert_eq!("mean_x2", result.parameter_names[1]);
         assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
@@ -228,7 +229,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 2.0_f64/3.0_f64);
+        replicate_estimates(crate::estimates::mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
     }
 
     #[test]
@@ -248,7 +249,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 2.0_f64/3.0_f64);
+        let result = replicate_estimates(crate::estimates::mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
         assert_eq!(1, result.parameter_names.len());
         assert_eq!("mean_x1", result.parameter_names[0]);
         assert_eq!(1, result.final_estimates.len());
@@ -270,7 +271,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
-        let result = replicate_estimates(crate::estimates::mean, &imp_data, &wgt, &rep_wgts, 2.0_f64/3.0_f64);
+        let result = replicate_estimates(crate::estimates::mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
         assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_eq!(result.sampling_variances, dvector![0.0, 0.0, 0.0, 0.0]);
     }

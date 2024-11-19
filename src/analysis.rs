@@ -129,8 +129,8 @@ impl Analysis {
         let result = replicate_estimates(
             self.estimate.as_ref().unwrap().clone(),
             &x,
-            self.wgt.as_ref().unwrap().deref(),
-            self.repwgts.as_ref().unwrap().deref(),
+            &vec![self.wgt.as_ref().unwrap().deref()],
+            &vec![self.repwgts.as_ref().unwrap().deref()],
             self.variance_adjustment_factor,
         );
 
