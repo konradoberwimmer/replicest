@@ -405,5 +405,65 @@ mod tests {
         replicate_estimates(mean, &imp_data, &vec![&wgt, &wgt, &wgt], &vec![&rep_wgts, &rep_wgts, &rep_wgts, &rep_wgts], 1.0);
     }
 
-    // TODO test using multiple imputations on (replicate) weights
+    #[test]
+    fn test_replicate_estimates_multiple_weights() {
+        let data1 = dmatrix![1.0; 3.0; 5.0; 7.0; 9.0];
+        let data2 = dmatrix![1.0; 7.0; 9.0];
+        let data3 = dmatrix![1.0; 3.0; 4.0; 5.0; 7.0; 9.0];
+        let data4 = dmatrix![1.0; 4.0; 7.0; 9.0];
+        let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
+        imp_data.push(&data1);
+        imp_data.push(&data2);
+        imp_data.push(&data3);
+        imp_data.push(&data4);
+
+        let wgt1 = dvector![1.0, 1.25, 1.5, 1.75, 2.0];
+        let wgt2 = dvector![1.0, 1.75, 2.0];
+        let wgt3 = dvector![1.0, 1.25, 1.25, 1.5, 1.75, 2.0];
+        let wgt4 = dvector![1.0, 1.25, 1.75, 2.0];
+        let mut imp_wgt: Vec<&DVector<f64>> = Vec::new();
+        imp_wgt.push(&wgt1);
+        imp_wgt.push(&wgt2);
+        imp_wgt.push(&wgt3);
+        imp_wgt.push(&wgt4);
+
+        let repwgt1 = dmatrix![
+            2.0, 1.0, 1.0, 1.0, 1.0;
+            1.25, 2.5, 1.25, 1.25, 1.25;
+            1.5, 1.5, 3.0, 1.5, 1.5;
+            1.75, 1.75, 1.75, 3.5, 1.75;
+            2.0, 2.0, 2.0, 2.0, 4.0;
+        ];
+        let repwgt2 = dmatrix![
+            2.0, 1.0, 1.0, 1.0, 1.0;
+            1.75, 1.75, 1.75, 3.5, 1.75;
+            2.0, 2.0, 2.0, 2.0, 4.0;
+        ];
+        let repwgt3 = dmatrix![
+            2.0, 1.0, 1.0, 1.0, 1.0;
+            1.25, 2.5, 1.25, 1.25, 1.25;
+            1.25, 0.0, 1.25, 1.25, 1.25;
+            1.5, 1.5, 3.0, 1.5, 1.5;
+            1.75, 1.75, 1.75, 3.5, 1.75;
+            2.0, 2.0, 2.0, 2.0, 4.0;
+        ];
+        let repwgt4 = dmatrix![
+            2.0, 1.0, 1.0, 1.0, 1.0;
+            1.25, 0.0, 1.25, 1.25, 1.25;
+            1.75, 1.75, 1.75, 3.5, 1.75;
+            2.0, 2.0, 2.0, 2.0, 4.0;
+        ];
+        let mut imp_repwgt: Vec<&DMatrix<f64>> = Vec::new();
+        imp_repwgt.push(&repwgt1);
+        imp_repwgt.push(&repwgt2);
+        imp_repwgt.push(&repwgt3);
+        imp_repwgt.push(&repwgt4);
+
+        let result = replicate_estimates(mean, &imp_data, &imp_wgt, &imp_repwgt, 1.0);
+        assert_eq!(1, result.final_estimates.len());
+        assert!((result.final_estimates[0] - 5.9289630325814535).abs() < 1e-10);
+        assert!((result.sampling_variances[0] - 1.1564444389077233).abs() < 1e-10);
+        assert!((result.imputation_variances[0] - 0.25145762896956225).abs() < 1e-10);
+        assert!((result.standard_errors[0] - 1.2127516131177383).abs() < 1e-10);
+    }
 }
