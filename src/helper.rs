@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use nalgebra::{DMatrix, DVector, Dim, Matrix, RawStorage};
 
 pub trait ExtractValues {
@@ -19,10 +19,23 @@ impl<R: Dim, C: Dim, S: RawStorage<f64, R, C>> ExtractValues for Matrix<f64, R, 
 }
 
 pub trait Split {
+    fn get_keys(&self) -> HashSet<Vec<String>>;
+
     fn split_by(&self, other: &DMatrix<f64>) -> HashMap<Vec<String>, DMatrix<f64>>;
 }
 
 impl Split for DMatrix<f64> {
+    fn get_keys(&self) -> HashSet<Vec<String>> {
+        let mut keys = HashSet::new();
+
+        for row in self.row_iter() {
+            let key : Vec<String> = row.iter().map(|s| s.to_string()).collect();
+            keys.insert(key);
+        }
+
+        keys
+    }
+
     fn split_by(&self, other: &DMatrix<f64>) -> HashMap<Vec<String>, DMatrix<f64>> {
         assert_eq!(self.nrows(), other.nrows(), "unequal number of rows in split_by");
 
@@ -82,6 +95,28 @@ mod tests {
         ];
 
         matrix.extract_lower_triangle();
+    }
+
+    #[test]
+    fn test_get_keys() {
+        let split_matrix = dmatrix![
+            1.0, 1.0;
+            1.0, 2.0;
+            2.0, 1.0;
+            2.0, 2.0;
+            1.0, 1.0;
+            f64::NAN, 1.0;
+            1.0, f64::NAN;
+            1.0, 2.0;
+            2.0, 1.0;
+        ];
+
+        let result = split_matrix.get_keys();
+
+        assert_eq!(result.len(), 6);
+        assert!(result.contains(&vec!["1".to_string(), "2".to_string()]));
+        assert!(result.contains(&vec!["1".to_string(), "NaN".to_string()]));
+        assert!(!result.contains(&vec!["2".to_string(), "NaN".to_string()]));
     }
 
     #[test]

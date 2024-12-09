@@ -35,8 +35,8 @@ pub fn small_benchmark_mean(c: &mut Criterion) {
         let _ = replication::replicate_estimates(
             black_box(estimates::mean),
             black_box(&imp_data),
-            black_box(&wgt),
-            black_box(&rep_wgts),
+            black_box(&vec![&wgt]),
+            black_box(&vec![&rep_wgts]),
             black_box(1.0));
     }));
 }
@@ -52,8 +52,8 @@ pub fn large_benchmark_mean(c: &mut Criterion) {
         replication::replicate_estimates(
             black_box(estimates::mean),
             black_box(&x),
-            black_box(&test_data.wgt),
-            black_box(&test_data.repwgt),
+            black_box(&vec![&test_data.wgt]),
+            black_box(&vec![&test_data.repwgt]),
             black_box(1.0)
         );
     }));
@@ -70,8 +70,8 @@ pub fn large_benchmark_correlation(c: &mut Criterion) {
         replication::replicate_estimates(
             black_box(estimates::correlation),
             black_box(&x),
-            black_box(&test_data.wgt),
-            black_box(&test_data.repwgt),
+            black_box(&vec![&test_data.wgt]),
+            black_box(&vec![&test_data.repwgt]),
             black_box(1.0)
         );
     }));

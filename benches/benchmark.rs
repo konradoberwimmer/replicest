@@ -93,6 +93,7 @@ pub mod benchmark {
 }
 
 criterion_group!(benches,
+    benchmark::helper::large_benchmark_get_keys,
     benchmark::helper::large_benchmark_split_by,
     benchmark::replication::small_benchmark_mean,
     benchmark::replication::large_benchmark_mean,
