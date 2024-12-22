@@ -18,13 +18,13 @@ impl<R: Dim, C: Dim, S: RawStorage<f64, R, C>> ExtractValues for Matrix<f64, R, 
     }
 }
 
-pub trait Split {
+pub trait Split<T> {
     fn get_keys(&self) -> HashSet<Vec<String>>;
 
-    fn split_by(&self, other: &DMatrix<f64>) -> HashMap<Vec<String>, DMatrix<f64>>;
+    fn split_by(&self, other: &DMatrix<f64>) -> HashMap<Vec<String>, T>;
 }
 
-impl Split for DMatrix<f64> {
+impl Split<DMatrix<f64>> for DMatrix<f64> {
     fn get_keys(&self) -> HashSet<Vec<String>> {
         let mut keys = HashSet::new();
 
@@ -64,6 +64,52 @@ impl Split for DMatrix<f64> {
             }
 
             hash_map.insert(entry.0.clone(), matrix);
+        }
+
+        hash_map
+    }
+}
+
+impl Split<DVector<f64>> for DVector<f64> {
+    fn get_keys(&self) -> HashSet<Vec<String>> {
+        let mut keys = HashSet::new();
+
+        for value in self.iter() {
+            let key : Vec<String> = vec![value.to_string()];
+            keys.insert(key);
+        }
+
+        keys
+    }
+
+    fn split_by(&self, other: &DMatrix<f64>) -> HashMap<Vec<String>, DVector<f64>> {
+        assert_eq!(self.nrows(), other.nrows(), "unequal number of rows in split_by");
+
+        let mut index_map : HashMap<Vec<String>, Vec<usize>> = HashMap::new();
+
+        for (r, row) in other.row_iter().enumerate() {
+            let key : Vec<String> = row.iter().map(|v| v.to_string()).collect();
+
+            let mut index_vector = if index_map.contains_key(&key) {
+                index_map[&key].clone()
+            } else {
+                Vec::<usize>::new()
+            };
+
+            index_vector.push(r);
+            index_map.insert(key, index_vector);
+        }
+
+        let mut hash_map : HashMap<Vec<String>, DVector<f64>> = HashMap::new();
+
+        for entry in index_map.into_iter() {
+            let mut vector = DVector::<f64>::zeros(entry.1.len());
+
+            for (r_new, r_old) in entry.1.into_iter().enumerate() {
+                vector.set_row(r_new, &self.row(r_old));
+            }
+
+            hash_map.insert(entry.0.clone(), vector);
         }
 
         hash_map
@@ -181,5 +227,53 @@ mod tests {
         ];
 
         data.split_by(&split_vector);
+    }
+
+    #[test]
+    fn test_get_keys_dvector() {
+        let split_vector = dvector![
+            1.0,
+            1.0,
+            2.0,
+            2.0,
+            1.0,
+            f64::NAN,
+            1.0,
+            1.0,
+            2.0,
+        ];
+
+        let result = split_vector.get_keys();
+
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&vec!["1".to_string()]));
+        assert!(result.contains(&vec!["2".to_string()]));
+        assert!(result.contains(&vec!["NaN".to_string()]));
+    }
+
+    #[test]
+    fn test_split_dvector() {
+        let data = dvector![
+            1.0,
+            4.0,
+            7.0,
+            10.0,
+            13.0,
+        ];
+
+        let split_data = dmatrix![
+            1.0, 1.0;
+            1.0, 2.0;
+            2.0, 1.0;
+            2.0, 2.0;
+            1.0, 1.0;
+        ];
+
+        let result = data.split_by(&split_data);
+        assert_eq!(4, result.len());
+        assert_eq!(2, result[&vec!["1".to_string(), "1".to_string()]].nrows());
+        assert_eq!(13.0, result[&vec!["1".to_string(), "1".to_string()]][1]);
+        assert_eq!(1, result[&vec!["2".to_string(), "2".to_string()]].nrows());
+        assert_eq!(10.0, result[&vec!["2".to_string(), "2".to_string()]][0]);
     }
 }
