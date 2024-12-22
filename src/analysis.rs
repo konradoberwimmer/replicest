@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::ops::Deref;
 use std::rc::Rc;
 use nalgebra::{DMatrix, DVector};
 use crate::errors::{InconsistencyError, MissingElementError};
 use crate::estimates;
+use crate::helper::Split;
 use crate::replication::{replicate_estimates, ReplicatedEstimates};
 
 pub enum Imputation<'a> {
@@ -92,52 +93,177 @@ impl Analysis {
         self
     }
 
-    pub fn calculate(&mut self) -> Result<HashMap<Vec<String>, ReplicatedEstimates>, Box<dyn Error>> {
+    fn prepare_missing_weights(&mut self) -> Result<(), Box<dyn Error>> {
         if self.x.is_none() || self.x.as_ref().unwrap().deref().len() == 0 {
             return Err(Box::new(MissingElementError::new("data")))
         }
 
-        if self.estimate.is_none() {
-            return Err(Box::new(MissingElementError::new("estimate")))
+        let ncases = self.x.as_ref().unwrap().deref()[0].nrows();
+
+        if self.wgt.is_none() {
+            self.wgt = Some(Rc::new(DVector::<f64>::from_element(ncases, 1.0)));
         }
+
+        if self.repwgts.is_none() {
+            self.repwgts = Some(Rc::new(DMatrix::<f64>::from_row_slice(ncases, 0, &[])));
+        }
+
+        Ok(())
+    }
+
+    fn prepare_for_calculate_overall(&self)
+        -> Result<(HashSet<Vec<String>>, HashMap<Vec<String>, Vec<&DMatrix<f64>>>, HashMap<Vec<String>, Vec<&DVector<f64>>>, HashMap<Vec<String>, Vec<&DMatrix<f64>>>), Box<dyn Error>>
+    {
+        let mut keys : HashSet<Vec<String>> = HashSet::new();
+        let mut x_split : HashMap<Vec<String>, Vec<&DMatrix<f64>>> = HashMap::new();
+        let mut wgt_split : HashMap<Vec<String>, Vec<&DVector<f64>>> = HashMap::new();
+        let mut repwgt_split : HashMap<Vec<String>, Vec<&DMatrix<f64>>> = HashMap::new();
+
+        keys.insert(vec!["overall".to_string()]);
 
         let mut x : Vec<&DMatrix<f64>> = Vec::new();
         for mat in self.x.as_ref().unwrap().deref() {
             x.push(mat);
         }
-
         let ncases = x[0].nrows();
 
-        if self.wgt.is_some() {
-            if ncases != self.wgt.as_ref().unwrap().nrows() {
-                return Err(Box::new(InconsistencyError::new("unequal number of rows for data and weights")))
-            }
-        } else {
-            self.wgt = Some(Rc::new(DVector::<f64>::from_element(ncases, 1.0)));
-        };
+        x_split.insert(vec!["overall".to_string()], x);
 
-        if self.repwgts.is_some() {
-            if ncases != self.repwgts.as_ref().unwrap().nrows() {
-                return Err(Box::new(InconsistencyError::new("unequal number of rows for data and replicate weights")))
+        if ncases != self.wgt.as_ref().unwrap().nrows() {
+            return Err(Box::new(InconsistencyError::new("unequal number of rows for data and weights")))
+        }
+        wgt_split.insert(vec!["overall".to_string()], vec![self.wgt.as_ref().unwrap().deref()]);
+
+        if ncases != self.repwgts.as_ref().unwrap().nrows() {
+            return Err(Box::new(InconsistencyError::new("unequal number of rows for data and replicate weights")))
+        }
+        repwgt_split.insert(vec!["overall".to_string()], vec![self.repwgts.as_ref().unwrap().deref()]);
+
+        Ok((keys, x_split, wgt_split, repwgt_split))
+    }
+
+    fn prepare_for_calculate_group_by(&self)
+        -> Result<(HashSet<Vec<String>>, HashMap<Vec<String>, Vec<DMatrix<f64>>>, HashMap<Vec<String>, Vec<DVector<f64>>>, HashMap<Vec<String>, Vec<DMatrix<f64>>>), Box<dyn Error>>
+    {
+        let mut keys : HashSet<Vec<String>> = HashSet::new();
+        let mut x_split : HashMap<Vec<String>, Vec<DMatrix<f64>>> = HashMap::new();
+        let mut wgt_split : HashMap<Vec<String>, Vec<DVector<f64>>> = HashMap::new();
+        let mut repwgt_split : HashMap<Vec<String>, Vec<DMatrix<f64>>> = HashMap::new();
+
+        let groups = self.groups.as_ref().unwrap().deref();
+
+        if groups.len() > 1 && groups.len() != self.x.as_ref().unwrap().deref().len() {
+            return Err(Box::new(InconsistencyError::new("number of data sets does not match number of sets with grouping columns")))
+        }
+
+        let multiple_imputation_groups = groups.len() > 1;
+
+        let unique_combinations = groups.first().unwrap().get_keys();
+        for combination in unique_combinations {
+            keys.insert(combination);
+        }
+
+        for (i, mat) in self.x.as_ref().unwrap().deref().iter().enumerate() {
+            let mat_split = mat.split_by(if multiple_imputation_groups { &groups[i] }  else { &groups[0] });
+
+            match i {
+                0 => {
+                    for (key, mat0) in mat_split {
+                        x_split.insert(key, vec![mat0]);
+                    }
+                }
+                _ => {
+                    for (key, mat0) in mat_split {
+                        x_split.get_mut(&key).unwrap().push(mat0);
+                    }
+                }
             }
-        } else {
-            self.repwgts = Some(Rc::new(DMatrix::<f64>::from_row_slice(ncases, 0, &[])))
+        }
+
+        for (i, groups0) in groups.iter().enumerate() {
+            let vec_split = self.wgt.as_ref().unwrap().deref().split_by(groups0);
+            let mat_split = self.repwgts.as_ref().unwrap().deref().split_by(groups0);
+
+            match i {
+                0 => {
+                    for (key, vec0) in vec_split {
+                        wgt_split.insert(key, vec![vec0]);
+                    }
+                    for (key, mat0) in mat_split {
+                        repwgt_split.insert(key, vec![mat0]);
+                    }
+                }
+                _ => {
+                    for (key, vec0) in vec_split {
+                        wgt_split.get_mut(&key).unwrap().push(vec0);
+                    }
+                    for (key, mat0) in mat_split {
+                        repwgt_split.get_mut(&key).unwrap().push(mat0);
+                    }
+                }
+            }
+        }
+
+        Ok((keys, x_split, wgt_split, repwgt_split))
+    }
+
+    pub fn calculate(&mut self) -> Result<HashMap<Vec<String>, ReplicatedEstimates>, Box<dyn Error>> {
+        if self.estimate.is_none() {
+            return Err(Box::new(MissingElementError::new("estimate")))
+        }
+
+        self.prepare_missing_weights()?;
+
+        let keys : HashSet<Vec<String>>;
+
+        let x_storage : HashMap<Vec<String>, Vec<DMatrix<f64>>>;
+        let wgt_storage : HashMap<Vec<String>, Vec<DVector<f64>>>;
+        let repwgt_storage : HashMap<Vec<String>, Vec<DMatrix<f64>>>;
+
+        let mut x_split : HashMap<Vec<String>, Vec<&DMatrix<f64>>>;
+        let mut wgt_split : HashMap<Vec<String>, Vec<&DVector<f64>>>;
+        let mut repwgt_split : HashMap<Vec<String>, Vec<&DMatrix<f64>>>;
+
+        match self.groups {
+            Some(ref groups) if groups.deref().len() > 0 => {
+                (keys, x_storage, wgt_storage, repwgt_storage) = self.prepare_for_calculate_group_by()?;
+
+                x_split = HashMap::new();
+                for (key, data) in x_storage.iter() {
+                    let x : Vec<&DMatrix<f64>> = data.iter().map(|mat| mat).collect();
+                    x_split.insert(key.clone(), x);
+                }
+
+                wgt_split = HashMap::new();
+                for (key, data) in wgt_storage.iter() {
+                    let wgt : Vec<&DVector<f64>> = data.iter().map(|wgt| wgt).collect();
+                    wgt_split.insert(key.clone(), wgt);
+                }
+
+                repwgt_split = HashMap::new();
+                for (key, data) in repwgt_storage.iter() {
+                    let repwgt : Vec<&DMatrix<f64>> = data.iter().map(|repwgt| repwgt).collect();
+                    repwgt_split.insert(key.clone(), repwgt);
+                }
+            }
+            _ => {
+                (keys, x_split, wgt_split, repwgt_split) = self.prepare_for_calculate_overall()?
+            }
         }
 
         let mut results : HashMap<Vec<String>, ReplicatedEstimates> = HashMap::new();
 
-        let result = replicate_estimates(
-            self.estimate.as_ref().unwrap().clone(),
-            &x,
-            &vec![self.wgt.as_ref().unwrap().deref()],
-            &vec![self.repwgts.as_ref().unwrap().deref()],
-            self.variance_adjustment_factor,
-        );
+        for key in keys {
+            let result = replicate_estimates(
+                self.estimate.as_ref().unwrap().clone(),
+                x_split.get(&key).unwrap(),
+                wgt_split.get(&key).unwrap(),
+                repwgt_split.get(&key).unwrap(),
+                self.variance_adjustment_factor,
+            );
 
-        let mut key : Vec<String> = Vec::new();
-        key.push("overall".to_string());
-
-        results.insert(key, result);
+            results.insert(key, result);
+        }
 
         Ok(results)
     }
@@ -273,13 +399,13 @@ mod tests {
     #[test]
     fn test_calculate_does_not_work_without_data() {
         let mut analysis1 = analysis();
-        let result = analysis1.calculate();
+        let result = analysis1.mean().calculate();
 
         assert!(result.is_err());
         assert_eq!("Analysis is missing some element: data", result.err().unwrap().deref().to_string());
 
         let mut analysis1 = analysis();
-        let result = analysis1.for_data(Imputation::Yes(&Vec::<&DMatrix<f64>>::new())).calculate();
+        let result = analysis1.mean().for_data(Imputation::Yes(&Vec::<&DMatrix<f64>>::new())).calculate();
 
         assert!(result.is_err());
         assert_eq!("Analysis is missing some element: data", result.err().unwrap().deref().to_string());
@@ -428,6 +554,85 @@ mod tests {
         assert_eq!(0, (first_result.sampling_variances() - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v.abs() > 1e-10).count());
         assert_eq!(0, (first_result.imputation_variances() - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
         assert_eq!(0, (first_result.standard_errors() - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v.abs() > 1e-10).count());
+    }
+
+    #[test]
+    fn test_calculate_works_for_mean_with_groups() {
+        let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
+        let data0 = DMatrix::from_row_slice(6, 4, &[
+            1.0, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.0, -2.5,
+            3.0, 3.0, 1.0, -3.5,
+            1.0, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.0, -2.5,
+            3.0, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data0);
+        let data1 = DMatrix::from_row_slice(6, 4, &[
+            1.2, 4.0, 2.5, -1.0,
+            2.5, 1.75, 3.9, -2.5,
+            2.7, 3.0, 1.0, -3.5,
+            1.2, 4.0, 2.5, -1.0,
+            2.5, 1.75, 3.9, -2.5,
+            2.7, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data1);
+        let data2 = DMatrix::from_row_slice(6, 4, &[
+            0.8, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.1, -2.5,
+            3.3, 3.0, 1.0, -3.5,
+            0.8, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.1, -2.5,
+            3.3, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data2);
+
+        let wgt = dvector![1.0, 0.5, 1.5, 1.0, 0.5, 1.5];
+        let rep_wgts = DMatrix::from_row_slice(6, 6, &[
+            0.0, 1.0, 1.0, 0.0, 1.0, 1.0,
+            0.5, 0.0, 0.5, 0.5, 0.0, 0.5,
+            1.5, 1.5, 0.0, 1.5, 1.5, 0.0,
+            0.0, 1.0, 1.0, 0.0, 1.0, 1.0,
+            0.5, 0.0, 0.5, 0.5, 0.0, 0.5,
+            1.5, 1.5, 0.0, 1.5, 1.5, 0.0,
+        ]);
+
+        let groups = DMatrix::from_row_slice(6, 1, &[
+            1.0,
+            1.0,
+            1.0,
+            2.0,
+            2.0,
+            2.0,
+        ]);
+
+        let mut analysis = analysis();
+        let result =
+            analysis
+                .for_data(Imputation::Yes(&imp_data))
+                .set_weights(&wgt)
+                .with_replicate_weights(&rep_wgts)
+                .set_variance_adjustment_factor(0.5)
+                .mean()
+                .group_by(Imputation::No(&groups))
+                .calculate();
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        assert_eq!(2, result.len());
+
+        let first_result = result[&vec!["1".to_string()]].clone();
+        assert_eq!(0, (first_result.final_estimates() - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (first_result.sampling_variances() - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (first_result.imputation_variances() - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (first_result.standard_errors() - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v.abs() > 1e-10).count());
+
+        let second_result = result[&vec!["2".to_string()]].clone();
+        assert_eq!(0, (second_result.final_estimates() - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (second_result.sampling_variances() - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (second_result.imputation_variances() - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_eq!(0, (second_result.standard_errors() - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v.abs() > 1e-10).count());
     }
 
     #[test]
