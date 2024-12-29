@@ -76,6 +76,7 @@ pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec
 
 #[cfg(test)]
 mod tests {
+    use crate::assert_approx_eq_iter_f64;
     use super::*;
 
     #[test]
@@ -114,17 +115,9 @@ mod tests {
         let expected_imputation_variances = vec![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0];
         let expected_standard_errors = vec![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25];
 
-        for (i, value) in expected_final_estimates.iter().enumerate() {
-            assert!(result.final_estimates[i] - value < 1e-10);
-        }
-        for (i, value) in expected_sampling_variances.iter().enumerate() {
-            assert!(result.sampling_variances[i] - value < 1e-10);
-        }
-        for (i, value) in expected_imputation_variances.iter().enumerate() {
-            assert!(result.imputation_variances[i] - value < 1e-10);
-        }
-        for (i, value) in expected_standard_errors.iter().enumerate() {
-            assert!(result.standard_errors[i] - value < 1e-10);
-        }
+        assert_approx_eq_iter_f64!(result.final_estimates, expected_final_estimates);
+        assert_approx_eq_iter_f64!(result.sampling_variances, expected_sampling_variances);
+        assert_approx_eq_iter_f64!(result.imputation_variances, expected_imputation_variances);
+        assert_approx_eq_iter_f64!(result.standard_errors, expected_standard_errors);
     }
 }

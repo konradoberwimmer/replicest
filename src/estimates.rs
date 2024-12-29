@@ -101,6 +101,7 @@ pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
 mod tests {
     use nalgebra::{dvector};
     use rand::prelude::*;
+    use crate::assert_approx_eq_iter_f64;
     use super::*;
 
     #[test]
@@ -210,14 +211,14 @@ mod tests {
         assert_eq!(result.parameter_names.len(), 30);
         assert_eq!(result.parameter_names[3], "covariance_x1_x4");
         assert_eq!(result.parameter_names[29], "correlation_x5_x5");
-        assert_eq!(0, (result.estimates - dvector![
+        assert_approx_eq_iter_f64!(result.estimates, dvector![
             0.0851125127537528, 0.0745170364892616, 0.0999257999354344, 0.0809170707561286, 0.0827147272285658,
             0.1422383888502900, 0.0896882794424707, 0.1052814596478720, 0.0374160358562062, 0.4255072964698915,
             0.0738826454202535, 0.0426837953915197, 0.7256835306983238, 0.1556382159926197, 1.5304209125363695,
             1.0, 0.6772522500178582, 0.5250823516888409, 0.3255890668883828, 0.2291820976004681,
             1.0, 0.3645639949803244, 0.3276950278469914, 0.0801943765003546, 1.0,
             0.1329582523578879, 0.0528937158520245, 1.0, 0.1476852643924908, 1.0,
-        ]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        ]);
     }
 
     #[test]
@@ -262,10 +263,10 @@ mod tests {
         let result = correlation(&data, &wgt);
         assert_eq!(result.parameter_names.len(), 12);
         assert_eq!(result.parameter_names[2], "covariance_x1_x3");
-        assert_eq!(0, (result.estimates - dvector![
+        assert_approx_eq_iter_f64!(result.estimates, dvector![
             2.3636363636363638, -0.18181818181818182, 0.727272727272726, 0.6433566433566433, 0.484848484848484, 1.131313131313130,
             1.0, -0.147441956154897, 0.4447495899966607, 1.0, 0.56831449608436613, 1.0
-        ]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        ]);
     }
 
     #[test]

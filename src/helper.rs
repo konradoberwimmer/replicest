@@ -116,6 +116,22 @@ impl Split<DVector<f64>> for DVector<f64> {
     }
 }
 
+#[macro_export]
+macro_rules! assert_approx_eq_iter_f64 {
+    ( $x: expr, $y: expr, $eps: literal ) => {
+        assert_eq!($x.len(), $y.len(), "unequal length");
+        for (i, value) in $x.iter().enumerate() {
+            assert!(f64::abs(value - $y.get(i).unwrap()) < $eps, "unequal value (epsilon {}) at index {}", $eps, i);
+        }
+    };
+    ( $x: expr, $y: expr ) => {
+        assert_eq!($x.len(), $y.len(), "unequal length");
+        for (i, value) in $x.iter().enumerate() {
+            assert!(f64::abs(value - $y.get(i).unwrap()) < 1e-10, "unequal value at index {}", i);
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use nalgebra::{dmatrix, dvector};
@@ -275,5 +291,31 @@ mod tests {
         assert_eq!(13.0, result[&vec!["1".to_string(), "1".to_string()]][1]);
         assert_eq!(1, result[&vec!["2".to_string(), "2".to_string()]].nrows());
         assert_eq!(10.0, result[&vec!["2".to_string(), "2".to_string()]][0]);
+    }
+
+    #[test]
+    fn test_assert_approx_eq_iter_f64() {
+        assert_approx_eq_iter_f64!(vec![1.0, -5.0], vec![1.0000000000001, -5.0]);
+        assert_approx_eq_iter_f64!(vec![1.0, -5.0], vec![1.0000000000001, -5.0], 1e-5);
+        assert_approx_eq_iter_f64!(dvector![1.0, -5.0], dvector![1.0000000000001, -5.0], 1e-5);
+        assert_approx_eq_iter_f64!(vec![1.0, -5.0], dvector![1.0000000000001, -5.0], 1e-5);
+    }
+
+    #[test]
+    #[should_panic(expected = "unequal length")]
+    fn test_assert_approx_eq_iter_f64_fails_unequal_length() {
+        assert_approx_eq_iter_f64!(vec![1.0, -5.0], vec![1.0000000000001]);
+    }
+
+    #[test]
+    #[should_panic(expected = "unequal value at index 0")]
+    fn test_assert_approx_eq_iter_f64_fails_different_values() {
+        assert_approx_eq_iter_f64!(vec![1.0, -5.0], vec![1.1, -5.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "unequal value (epsilon 0.000000000000001) at index 0")]
+    fn test_assert_approx_eq_iter_f64_fails_epsilon() {
+        assert_approx_eq_iter_f64!(vec![1.0, -5.0], vec![1.0000000000001, -5.0], 1e-15);
     }
 }

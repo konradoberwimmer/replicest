@@ -125,6 +125,7 @@ fn calc_standard_errors_from_variances(sampling_variances: &DVector<f64>, imputa
 #[cfg(test)]
 mod tests {
     use nalgebra::{dmatrix, dvector};
+    use crate::assert_approx_eq_iter_f64;
     use crate::estimates::mean;
     use super::*;
 
@@ -178,10 +179,10 @@ mod tests {
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
         let result = replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
-        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
-        assert_eq!(0, (result.sampling_variances - dvector![0.0, 0.0, 0.0, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
-        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
-        assert_eq!(0, (result.standard_errors - dvector![0.09622504486493728, 0.0, 0.01924500897298746, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_approx_eq_iter_f64!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
+        assert_approx_eq_iter_f64!(result.sampling_variances, dvector![0.0, 0.0, 0.0, 0.0]);
+        assert_approx_eq_iter_f64!(result.imputation_variances, dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]);
+        assert_approx_eq_iter_f64!(result.standard_errors, dvector![0.09622504486493728, 0.0, 0.01924500897298746, 0.0]);
     }
 
     #[test]
@@ -216,10 +217,10 @@ mod tests {
         let result = replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
         assert_eq!(4, result.parameter_names.len());
         assert_eq!("mean_x2", result.parameter_names[1]);
-        assert_eq!(0, (result.final_estimates - dvector![2.25, 3.125, 2.0, -2.5]).iter().filter(|&&v| v.abs() > 1e-10).count());
-        assert_eq!(0, (result.sampling_variances - dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]).iter().filter(|&&v| v.abs() > 1e-10).count());
-        assert_eq!(0, (result.imputation_variances - dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]).iter().filter(|&&v| v.abs() > 1e-10).count());
-        assert_eq!(0, (result.standard_errors - dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]).iter().filter(|&&v| v.abs() > 1e-10).count());
+        assert_approx_eq_iter_f64!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
+        assert_approx_eq_iter_f64!(result.sampling_variances, dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]);
+        assert_approx_eq_iter_f64!(result.imputation_variances, dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]);
+        assert_approx_eq_iter_f64!(result.standard_errors, dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]);
     }
 
     #[test]
@@ -461,9 +462,9 @@ mod tests {
 
         let result = replicate_estimates(mean, &imp_data, &imp_wgt, &imp_repwgt, 1.0);
         assert_eq!(1, result.final_estimates.len());
-        assert!((result.final_estimates[0] - 5.9289630325814535).abs() < 1e-10);
-        assert!((result.sampling_variances[0] - 1.1564444389077233).abs() < 1e-10);
-        assert!((result.imputation_variances[0] - 0.25145762896956225).abs() < 1e-10);
-        assert!((result.standard_errors[0] - 1.2127516131177383).abs() < 1e-10);
+        assert_approx_eq_iter_f64!(result.final_estimates, vec![5.9289630325814535]);
+        assert_approx_eq_iter_f64!(result.sampling_variances, vec![1.1564444389077233]);
+        assert_approx_eq_iter_f64!(result.imputation_variances, vec![0.25145762896956225]);
+        assert_approx_eq_iter_f64!(result.standard_errors, vec![1.2127516131177383]);
     }
 }
