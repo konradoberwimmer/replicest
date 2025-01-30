@@ -116,6 +116,50 @@ impl Split<DVector<f64>> for DVector<f64> {
     }
 }
 
+pub struct OrderedWeightedF64Counts {
+    keys: Vec<f64>,
+    counts: Vec<f64>,
+    sum_of_weights: f64,
+}
+
+impl OrderedWeightedF64Counts {
+    pub fn new() -> OrderedWeightedF64Counts {
+        OrderedWeightedF64Counts {
+            keys: Vec::new(),
+            counts: Vec::new(),
+            sum_of_weights: 0.0,
+        }
+    }
+
+    pub fn push(&mut self, key: f64, weight: f64) {
+        self.sum_of_weights += weight;
+
+        for pp in 0..self.keys.len() {
+            if (self.keys[pp] - key).abs() < f64::EPSILON {
+                self.counts[pp] += weight;
+                return;
+            }
+
+            if self.keys[pp] > key {
+                self.keys.insert(pp, key);
+                self.counts.insert(pp, weight);
+                return;
+            }
+        }
+
+        self.keys.push(key);
+        self.counts.push(weight);
+    }
+
+    pub fn get_counts(&self) -> Vec<(f64, f64)> {
+        Vec::from_iter(self.keys.iter().map(|v| v.clone()).zip(self.counts.iter().map(|v| v.clone())))
+    }
+
+    pub fn get_sum_of_weights(&self) -> f64 {
+        self.sum_of_weights
+    }
+}
+
 #[macro_export]
 macro_rules! assert_approx_eq_iter_f64 {
     ( $x: expr, $y: expr, $eps: literal ) => {
@@ -291,6 +335,32 @@ mod tests {
         assert_eq!(13.0, result[&vec!["1".to_string(), "1".to_string()]][1]);
         assert_eq!(1, result[&vec!["2".to_string(), "2".to_string()]].nrows());
         assert_eq!(10.0, result[&vec!["2".to_string(), "2".to_string()]][0]);
+    }
+
+    #[test]
+    fn test_ordered_weigthed_f64_counts() {
+        let mut order_weighted_f64_counts = OrderedWeightedF64Counts::new();
+
+        order_weighted_f64_counts.push(2.0, 1.0);
+        order_weighted_f64_counts.push(1.0, 1.0);
+
+        assert_eq!(2, order_weighted_f64_counts.get_counts().len());
+        assert!((order_weighted_f64_counts.get_counts()[0].0 - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].1 - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_sum_of_weights() - 2.0).abs() < f64::EPSILON);
+
+        order_weighted_f64_counts.push(1.0, 1.5);
+        order_weighted_f64_counts.push(1.5, 0.75);
+        order_weighted_f64_counts.push(1.0, 1.5);
+
+        assert_eq!(3, order_weighted_f64_counts.get_counts().len());
+        assert!((order_weighted_f64_counts.get_counts()[0].0 - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].1 - 4.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[1].0 - 1.5).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[1].1 - 0.75).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[2].0 - 2.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[2].1 - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_sum_of_weights() - 5.75).abs() < f64::EPSILON);
     }
 
     #[test]

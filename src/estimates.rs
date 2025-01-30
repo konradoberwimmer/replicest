@@ -1,5 +1,5 @@
 use nalgebra::{DMatrix, DVector};
-use crate::helper::ExtractValues;
+use crate::helper::{ExtractValues, OrderedWeightedF64Counts};
 
 pub struct Estimates {
     parameter_names: Vec<String>,
@@ -14,6 +14,21 @@ impl Estimates {
     pub fn estimates(&self) -> &DVector<f64> {
         &self.estimates
     }
+}
+
+fn weighted_count_values(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Vec<OrderedWeightedF64Counts> {
+    let mut counts = Vec::new();
+    for _ in 0..x.ncols() {
+        counts.push(OrderedWeightedF64Counts::new());
+    }
+
+    for rr in 0..x.nrows() {
+        for cc in 0..x.ncols() {
+            counts[cc].push(x[(rr, cc)], wgt[rr]);
+        }
+    }
+
+    counts
 }
 
 pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
@@ -103,6 +118,41 @@ mod tests {
     use rand::prelude::*;
     use crate::assert_approx_eq_iter_f64;
     use super::*;
+
+    #[test]
+    fn test_weighted_count_values() {
+        let data = DMatrix::from_row_slice(12, 2, &[
+            1.0, 4.0,
+            2.0, 1.0,
+            1.0, 3.0,
+            1.0, 4.0,
+            2.0, 2.0,
+            1.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.0,
+            1.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.0,
+            1.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.5];
+
+        let result = weighted_count_values(&data, &wgt);
+        assert_eq!(2, result.len());
+
+        assert_eq!(2, result[0].get_counts().len());
+        assert_eq!((1.0, 7.0), result[0].get_counts()[0]);
+        assert_eq!((2.0, 5.0), result[0].get_counts()[1]);
+        assert_eq!(12.0, result[0].get_sum_of_weights());
+
+        assert_eq!(4, result[1].get_counts().len());
+        assert_eq!((1.0, 3.5), result[1].get_counts()[0]);
+        assert_eq!((2.0, 1.5), result[1].get_counts()[1]);
+        assert_eq!((3.0, 4.5), result[1].get_counts()[2]);
+        assert_eq!((4.0, 2.5), result[1].get_counts()[3]);
+        assert_eq!(12.0, result[1].get_sum_of_weights());
+    }
 
     #[test]
     fn test_mean() {
