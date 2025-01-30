@@ -75,6 +75,12 @@ impl Analysis {
         self
     }
 
+    pub fn correlation(&mut self) -> &mut Self {
+        self.estimate_name = Some("correlation".to_string());
+        self.estimate = Some(estimates::correlation);
+        self
+    }
+
     pub fn group_by(&mut self, data: Imputation) -> &mut Self {
         let mut new_vec : Vec<DMatrix<f64>> = Vec::new();
 
@@ -558,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_works_for_mean_with_groups() {
+    fn test_calculate_works_for_mean_with_groups_same() {
         let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
         let data0 = DMatrix::from_row_slice(6, 4, &[
             1.0, 4.0, 2.5, -1.0,
@@ -634,6 +640,70 @@ mod tests {
         assert_approx_eq_iter_f64!(second_result.sampling_variances(), dvector![1.000486111111111, 0.28265624999999994, 1.2229166666666667, 1.5625]);
         assert_approx_eq_iter_f64!(second_result.imputation_variances(), dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]);
         assert_approx_eq_iter_f64!(second_result.standard_errors(), dvector![1.0048608711510119, 0.5316542579534184, 1.1060230725608924, 1.25]);
+    }
+
+    #[test]
+    fn test_calculate_works_for_mean_with_groups_different() {
+        let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
+        let data0 = DMatrix::from_row_slice(10, 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
+        let data1 = DMatrix::from_row_slice(10, 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
+        let data2 = DMatrix::from_row_slice(10, 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
+        let data3 = DMatrix::from_row_slice(10, 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
+        imp_data.push(&data0);
+        imp_data.push(&data1);
+        imp_data.push(&data2);
+        imp_data.push(&data3);
+
+        let mut imp_groups: Vec<&DMatrix<f64>> = Vec::new();
+        let group0 = DMatrix::from_row_slice(10, 1, &[1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        let group1 = DMatrix::from_row_slice(10, 1, &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        let group2 = DMatrix::from_row_slice(10, 1, &[1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        let group3 = DMatrix::from_row_slice(10, 1, &[1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        imp_groups.push(&group0);
+        imp_groups.push(&group1);
+        imp_groups.push(&group2);
+        imp_groups.push(&group3);
+
+        let wgts = dvector![1.0, 1.0, 1.25, 1.25, 1.5, 1.5, 1.75, 1.75, 2.0, 2.0];
+
+        let rep_wgts = DMatrix::from_row_slice(10, 5, &[
+            2.0, 1.0, 1.0, 1.0, 1.0,
+            0.0, 1.0, 1.0, 1.0, 1.0,
+            1.25, 2.5, 1.25, 1.25, 1.25,
+            1.25, 0.0, 1.25, 1.25, 1.25,
+            1.5, 1.5, 3.0, 1.5, 1.5,
+            1.5, 1.5, 0.0, 1.5, 1.5,
+            1.75, 1.75, 1.75, 3.5, 1.75,
+            1.75, 1.75, 1.75, 0.0, 1.75,
+            2.0, 2.0, 2.0, 2.0, 4.0,
+            2.0, 2.0, 2.0, 2.0, 0.0
+        ]);
+
+        let mut analysis = analysis();
+        analysis
+            .mean()
+            .for_data(Imputation::Yes(&imp_data))
+            .set_weights(&wgts)
+            .with_replicate_weights(&rep_wgts)
+            .group_by(Imputation::Yes(&imp_groups));
+
+        let result = analysis.calculate();
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(2, result.len());
+
+        let first_result = result[&vec!["0".to_string()]].clone();
+        assert_approx_eq_iter_f64!(first_result.final_estimates(), dvector![6.523069], 1e-6);
+        assert_approx_eq_iter_f64!(first_result.sampling_variances(), dvector![2.139808], 1e-6);
+        assert_approx_eq_iter_f64!(first_result.imputation_variances(), dvector![0.2843781], 1e-6);
+        assert_approx_eq_iter_f64!(first_result.standard_errors(), dvector![1.579646], 1e-6);
+
+        let second_result = result[&vec!["1".to_string()]].clone();
+        assert_approx_eq_iter_f64!(second_result.final_estimates(), dvector![5.928963], 1e-6);
+        assert_approx_eq_iter_f64!(second_result.sampling_variances(), dvector![1.156444], 1e-6);
+        assert_approx_eq_iter_f64!(second_result.imputation_variances(), dvector![0.2514576], 1e-6);
+        assert_approx_eq_iter_f64!(second_result.standard_errors(), dvector![1.212752], 1e-6);
     }
 
     #[test]
