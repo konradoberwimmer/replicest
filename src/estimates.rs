@@ -1,5 +1,5 @@
 use nalgebra::{DMatrix, DVector};
-use crate::helper::{ExtractValues, OrderedWeightedF64Counts};
+use crate::helper::{ExtractValues, OrderedF64Counts};
 
 pub struct Estimates {
     parameter_names: Vec<String>,
@@ -16,10 +16,10 @@ impl Estimates {
     }
 }
 
-fn weighted_count_values(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Vec<OrderedWeightedF64Counts> {
+fn weighted_count_values(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Vec<OrderedF64Counts> {
     let mut counts = Vec::new();
     for _ in 0..x.ncols() {
-        counts.push(OrderedWeightedF64Counts::new());
+        counts.push(OrderedF64Counts::new());
     }
 
     for rr in 0..x.nrows() {
@@ -142,15 +142,15 @@ mod tests {
         assert_eq!(2, result.len());
 
         assert_eq!(2, result[0].get_counts().len());
-        assert_eq!((1.0, 7.0), result[0].get_counts()[0]);
-        assert_eq!((2.0, 5.0), result[0].get_counts()[1]);
+        assert_eq!((1.0, 8.0, 7.0), result[0].get_counts()[0]);
+        assert_eq!((2.0, 4.0, 5.0), result[0].get_counts()[1]);
         assert_eq!(12.0, result[0].get_sum_of_weights());
 
         assert_eq!(4, result[1].get_counts().len());
-        assert_eq!((1.0, 3.5), result[1].get_counts()[0]);
-        assert_eq!((2.0, 1.5), result[1].get_counts()[1]);
-        assert_eq!((3.0, 4.5), result[1].get_counts()[2]);
-        assert_eq!((4.0, 2.5), result[1].get_counts()[3]);
+        assert_eq!((1.0, 3.0, 3.5), result[1].get_counts()[0]);
+        assert_eq!((2.0, 1.0, 1.5), result[1].get_counts()[1]);
+        assert_eq!((3.0, 4.0, 4.5), result[1].get_counts()[2]);
+        assert_eq!((4.0, 4.0, 2.5), result[1].get_counts()[3]);
         assert_eq!(12.0, result[1].get_sum_of_weights());
     }
 
