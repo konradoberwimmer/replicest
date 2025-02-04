@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Arc;
 use nalgebra::{DMatrix, DVector};
 use crate::errors::{InconsistencyError, MissingElementError};
 use crate::estimates;
@@ -282,7 +283,7 @@ impl Analysis {
 
         for key in keys {
             let result = replicate_estimates(
-                self.estimate.as_ref().unwrap().clone(),
+                Arc::new(self.estimate.as_ref().unwrap().clone()),
                 x_split.get(&key).unwrap(),
                 wgt_split.get(&key).unwrap(),
                 repwgt_split.get(&key).unwrap(),

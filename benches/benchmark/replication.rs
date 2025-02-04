@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use criterion::{black_box, Criterion};
 use nalgebra::{dvector, DMatrix};
 use replicest::replication;
@@ -33,7 +34,7 @@ pub fn small_benchmark_mean(c: &mut Criterion) {
         ]);
 
         let _ = replication::replicate_estimates(
-            black_box(estimates::mean),
+            black_box(Arc::new(estimates::mean)),
             black_box(&imp_data),
             black_box(&vec![&wgt]),
             black_box(&vec![&rep_wgts]),
@@ -50,7 +51,7 @@ pub fn large_benchmark_mean(c: &mut Criterion) {
 
     c.bench_function("mean n10000 c5 i5 wgt50", |b| b.iter(|| {
         replication::replicate_estimates(
-            black_box(estimates::mean),
+            black_box(Arc::new(estimates::mean)),
             black_box(&x),
             black_box(&vec![&test_data.wgt]),
             black_box(&vec![&test_data.repwgt]),
@@ -68,7 +69,7 @@ pub fn large_benchmark_correlation(c: &mut Criterion) {
 
     c.bench_function("correlation n10000 c5 i5 wgt50", |b| b.iter(|| {
         replication::replicate_estimates(
-            black_box(estimates::correlation),
+            black_box(Arc::new(estimates::correlation)),
             black_box(&x),
             black_box(&vec![&test_data.wgt]),
             black_box(&vec![&test_data.repwgt]),

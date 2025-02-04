@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use nalgebra::{DMatrix, DVector, Dyn, Matrix, U1};
 use serde::{Deserialize, Serialize};
 use crate::{estimates, replication};
@@ -62,9 +63,8 @@ pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec
     }
     let ref_replicate_weights : Vec<&DMatrix<f64>> = Vec::from_iter(replicate_weights.iter());
 
-
     let result = replication::replicate_estimates(
-        estimate_function,
+        Arc::new(estimate_function),
         &ref_data,
         &ref_weights,
         &ref_replicate_weights,

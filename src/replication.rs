@@ -1,4 +1,4 @@
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use nalgebra::{DMatrix, DVector};
 use std::thread;
 use crate::estimates;
@@ -35,7 +35,7 @@ impl ReplicatedEstimates {
     }
 }
 
-pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates, x: &Vec<&DMatrix<f64>>, weights: &Vec<&DVector<f64>>, replicate_wgts: &Vec<&DMatrix<f64>>, factor: f64) -> ReplicatedEstimates {
+pub fn replicate_estimates(estimator: Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync>, x: &Vec<&DMatrix<f64>>, weights: &Vec<&DVector<f64>>, replicate_wgts: &Vec<&DMatrix<f64>>, factor: f64) -> ReplicatedEstimates {
     assert!(weights.len() == 1 || weights.len() == x.len(), "length mismatch of weights and data in replicate_estimates");
     assert!(replicate_wgts.len() == 1 || replicate_wgts.len() == x.len(), "length mismatch of replicate weights and data in replicate_estimates");
 
@@ -56,14 +56,15 @@ pub fn replicate_estimates(estimator: fn(&DMatrix<f64>, &DVector<f64>) -> estima
                 _ => { replicate_wgts[imputation] },
             };
             let transmitter1 = transmitter.clone();
+            let estimator1 = estimator.clone();
 
             scope.spawn(move || {
-                let estimates_imputation = estimator(&data, weight);
+                let estimates_imputation = estimator1(&data, weight);
 
                 let sampling_variances_imputation: DVector<f64> = if repweights.ncols() > 0 {
                     let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(estimates_imputation.estimates().len(), repweights.ncols());
                     for c in 0..repweights.ncols() {
-                        let estimates0 = estimator(&data, &DVector::from(repweights.column(c)));
+                        let estimates0 = estimator1(&data, &DVector::from(repweights.column(c)));
                         replicated_estimates.set_column(c, &estimates0.estimates());
                     }
 
@@ -146,7 +147,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
+        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
         assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_eq!(result.sampling_variances, dvector![0.6370833333333332, 0.18843749999999995, 0.815, 1.0416666666666665]);
         assert_eq!(result.imputation_variances, dvector![0.0, 0.0, 0.0, 0.0]);
@@ -178,7 +179,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
-        let result = replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
+        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
         assert_approx_eq_iter_f64!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_approx_eq_iter_f64!(result.sampling_variances, dvector![0.0, 0.0, 0.0, 0.0]);
         assert_approx_eq_iter_f64!(result.imputation_variances, dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]);
@@ -214,7 +215,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
+        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
         assert_eq!(4, result.parameter_names.len());
         assert_eq!("mean_x2", result.parameter_names[1]);
         assert_approx_eq_iter_f64!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
@@ -241,7 +242,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
+        replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
     }
 
     #[test]
@@ -261,7 +262,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
+        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
         assert_eq!(1, result.parameter_names.len());
         assert_eq!("mean_x1", result.parameter_names[0]);
         assert_eq!(1, result.final_estimates.len());
@@ -283,7 +284,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
-        let result = replicate_estimates(mean, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
+        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
         assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_eq!(result.sampling_variances, dvector![0.0, 0.0, 0.0, 0.0]);
     }
@@ -382,7 +383,7 @@ mod tests {
 
         let wgt = dvector![1.0, 0.5, 1.5];
 
-        replicate_estimates(mean, &imp_data, &vec![&wgt, &wgt], &vec![], 1.0);
+        replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt, &wgt], &vec![], 1.0);
     }
 
     #[test]
@@ -403,7 +404,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        replicate_estimates(mean, &imp_data, &vec![&wgt, &wgt, &wgt], &vec![&rep_wgts, &rep_wgts, &rep_wgts, &rep_wgts], 1.0);
+        replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt, &wgt, &wgt], &vec![&rep_wgts, &rep_wgts, &rep_wgts, &rep_wgts], 1.0);
     }
 
     #[test]
@@ -460,7 +461,7 @@ mod tests {
         imp_repwgt.push(&repwgt3);
         imp_repwgt.push(&repwgt4);
 
-        let result = replicate_estimates(mean, &imp_data, &imp_wgt, &imp_repwgt, 1.0);
+        let result = replicate_estimates(Arc::new(mean), &imp_data, &imp_wgt, &imp_repwgt, 1.0);
         assert_eq!(1, result.final_estimates.len());
         assert_approx_eq_iter_f64!(result.final_estimates, vec![5.9289630325814535]);
         assert_approx_eq_iter_f64!(result.sampling_variances, vec![1.1564444389077233]);
