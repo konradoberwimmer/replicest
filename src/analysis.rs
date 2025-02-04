@@ -21,6 +21,8 @@ pub struct Analysis {
     estimate_name: Option<String>,
     estimate: Option<fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates>,
     groups: Option<Rc<Vec<DMatrix<f64>>>>,
+    quantiles: Vec<f64>,
+    quantile_type: estimates::QuantileType,
 }
 
 pub fn analysis() -> Analysis {
@@ -32,6 +34,8 @@ pub fn analysis() -> Analysis {
         estimate_name: None,
         estimate: None,
         groups: None,
+        quantiles: vec![0.25, 0.50, 0.75],
+        quantile_type: estimates::QuantileType::Interpolation,
     }
 }
 
@@ -79,6 +83,23 @@ impl Analysis {
         self.estimate_name = Some("correlation".to_string());
         self.estimate = Some(estimates::correlation);
         self
+    }
+
+    pub fn quantiles(&mut self) -> &mut Self {
+        self.estimate_name = Some("quantiles".to_string());
+        self.estimate = Some(estimates::quantiles);
+        // TODO bring in the options
+        self
+    }
+
+    pub fn set_quantiles(&mut self, quantiles: Vec<f64>) -> &mut Self {
+        self.quantiles = quantiles;
+        self.quantiles()
+    }
+
+    pub fn set_quantile_type(&mut self, quantile_type: estimates::QuantileType) -> &mut Self {
+        self.quantile_type = quantile_type;
+        self.quantiles()
     }
 
     pub fn group_by(&mut self, data: Imputation) -> &mut Self {
@@ -324,6 +345,8 @@ impl Analysis {
             estimate_name: self.estimate_name.clone(),
             estimate: self.estimate.clone(),
             groups: self.groups.clone(),
+            quantiles: self.quantiles.clone(),
+            quantile_type: self.quantile_type.clone(),
         }
     }
 }

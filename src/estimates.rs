@@ -31,6 +31,77 @@ fn weighted_count_values(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Vec<OrderedF64
     counts
 }
 
+#[derive(Clone)]
+pub enum QuantileType {
+    Lower,
+    Interpolation,
+    Upper,
+}
+
+pub fn quantiles_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, quantiles: Vec<f64>, quantile_type: QuantileType) -> Estimates {
+    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in mean");
+    assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in quantiles");
+    assert!(quantiles.len() > 0, "quantiles are empty");
+    assert_eq!(0, quantiles.iter().filter(|e| e.is_nan()).count(), "quantiles contain NaNs");
+
+    let counts = weighted_count_values(&x, &wgt);
+
+    let mut ordered_quantiles = quantiles.clone();
+    ordered_quantiles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let mut parameter_names = Vec::new();
+    let mut estimates = DVector::from_element(counts.len() * quantiles.len(), f64::NAN);
+
+    for (cc, count) in counts.iter().enumerate() {
+        let mut cumulative_weight = 0.0;
+        let mut current_quantile = 0;
+
+        for (vv, (value, _, weight)) in count.get_counts().iter().enumerate() {
+            cumulative_weight += weight;
+            let percent_change = weight / count.get_sum_of_weights();
+            let cumulative_percent = cumulative_weight / count.get_sum_of_weights();
+
+            while current_quantile < ordered_quantiles.len() && cumulative_percent > ordered_quantiles[current_quantile] {
+                parameter_names.push(format!("quantile_x{}_{}", cc + 1, ordered_quantiles[current_quantile]));
+                match quantile_type {
+                    QuantileType::Lower => {
+                        estimates[cc * quantiles.len() + current_quantile] = if vv > 0 { count.get_counts()[vv - 1].0 } else { *value };
+                    }
+                    QuantileType::Interpolation => {
+                        estimates[cc * quantiles.len() + current_quantile] = if vv > 0 {
+                            let lower = count.get_counts()[vv - 1].0;
+                            lower + (value - lower) * (ordered_quantiles[current_quantile] - (cumulative_percent - percent_change)) / (percent_change + f64::EPSILON)
+                        } else { *value };
+                    }
+                    QuantileType::Upper => {
+                        estimates[cc * quantiles.len() + current_quantile] = *value;
+                    }
+                }
+                current_quantile += 1;
+            }
+
+            if current_quantile == ordered_quantiles.len() {
+                break;
+            }
+        }
+
+        while current_quantile < ordered_quantiles.len() {
+            parameter_names.push(format!("quantile_x{}_{}", cc + 1, ordered_quantiles[current_quantile]));
+            estimates[cc * quantiles.len() + current_quantile] = count.get_counts().last().unwrap().0;
+            current_quantile += 1;
+        }
+    }
+
+    Estimates {
+        parameter_names,
+        estimates,
+    }
+}
+
+pub fn quantiles(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
+    quantiles_with_options(x, wgt, vec![0.25, 0.50, 0.75], QuantileType::Interpolation)
+}
+
 pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in mean");
     assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in mean");
@@ -152,6 +223,139 @@ mod tests {
         assert_eq!((3.0, 4.0, 4.5), result[1].get_counts()[2]);
         assert_eq!((4.0, 4.0, 2.5), result[1].get_counts()[3]);
         assert_eq!(12.0, result[1].get_sum_of_weights());
+    }
+
+    #[test]
+    #[should_panic(expected = "dimension mismatch of x and wgt in mean")]
+    fn test_quantiles_panic_dimension_mismatch() {
+        let data = DMatrix::from_row_slice(2, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        quantiles(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "wgt contains NaN in quantiles")]
+    fn test_quantiles_panic_wgt_containing_nan() {
+        let data = DMatrix::from_row_slice(3, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+            3.0, 3.0, 1.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, f64::NAN];
+
+        quantiles(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "quantiles are empty")]
+    fn test_quantiles_panic_quantiles_empty() {
+        let data = DMatrix::from_row_slice(3, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+            2.5, 1.75, 4.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        quantiles_with_options(&data, &wgt, vec![], QuantileType::Interpolation);
+    }
+
+    #[test]
+    #[should_panic(expected = "quantiles contain NaNs")]
+    fn test_quantiles_panic_quantiles_containing_nan() {
+        let data = DMatrix::from_row_slice(3, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+            3.0, 3.0, 1.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        quantiles_with_options(&data, &wgt, vec![0.25, 0.50, f64::NAN], QuantileType::Interpolation);
+    }
+
+    #[test]
+    fn test_quantiles_lower() {
+        let data = DMatrix::from_row_slice(10, 2, &[
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            3.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0];
+
+        let result = quantiles_with_options(&data, &wgt, vec![0.90, 0.25, 0.50, 0.75, 0.10], QuantileType::Lower);
+        assert_eq!(result.parameter_names.len(), 10);
+        assert_eq!(result.parameter_names[0], "quantile_x1_0.1");
+        assert_eq!(result.parameter_names[8], "quantile_x2_0.75");
+        assert_eq!(result.estimates, dvector![
+            1.0, 1.0, 2.0, 2.0, 2.0, 1.75, 1.75, 1.75, 3.0, 3.0
+        ]);
+    }
+
+    #[test]
+    fn test_quantiles_interpolation() {
+        let data = DMatrix::from_row_slice(10, 2, &[
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            3.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0];
+
+        let result = quantiles(&data, &wgt);
+        assert_eq!(result.parameter_names.len(), 6);
+        assert_eq!(result.parameter_names[1], "quantile_x1_0.5");
+        assert_eq!(result.parameter_names[5], "quantile_x2_0.75");
+        assert_approx_eq_iter_f64!(result.estimates, dvector![
+            1.0, 2.090909090909091, 2.5454545454545454, 1.9772727272727273, 2.5454545454545454, 3.1666666666666665
+        ]);
+    }
+
+    #[test]
+    fn test_quantiles_upper() {
+        let data = DMatrix::from_row_slice(10, 2, &[
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            3.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0];
+
+        let result = quantiles_with_options(&data, &wgt, vec![0.10, 0.25, 0.50, 0.75, 0.90], QuantileType::Upper);
+        assert_eq!(result.parameter_names.len(), 10);
+        assert_eq!(result.parameter_names[1], "quantile_x1_0.25");
+        assert_eq!(result.parameter_names[8], "quantile_x2_0.75");
+        assert_eq!(result.estimates, dvector![
+            1.0, 1.0, 3.0, 3.0, 3.0, 1.75, 3.0, 3.0, 4.0, 4.0
+        ]);
     }
 
     #[test]
