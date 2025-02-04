@@ -20,7 +20,7 @@ pub struct Analysis {
     repwgts: Option<Rc<DMatrix<f64>>>,
     variance_adjustment_factor: f64,
     estimate_name: Option<String>,
-    estimate: Option<fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates>,
+    estimate: Option<Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync>>,
     groups: Option<Rc<Vec<DMatrix<f64>>>>,
     quantiles: Vec<f64>,
     quantile_type: estimates::QuantileType,
@@ -76,20 +76,21 @@ impl Analysis {
 
     pub fn mean(&mut self) -> &mut Self {
         self.estimate_name = Some("mean".to_string());
-        self.estimate = Some(estimates::mean);
+        self.estimate = Some(Arc::new(estimates::mean));
         self
     }
 
     pub fn correlation(&mut self) -> &mut Self {
         self.estimate_name = Some("correlation".to_string());
-        self.estimate = Some(estimates::correlation);
+        self.estimate = Some(Arc::new(estimates::correlation));
         self
     }
 
     pub fn quantiles(&mut self) -> &mut Self {
         self.estimate_name = Some("quantiles".to_string());
-        self.estimate = Some(estimates::quantiles);
-        // TODO bring in the options
+        let quantiles = self.quantiles.clone();
+        let quantile_type = self.quantile_type.clone();
+        self.estimate = Some(Arc::new(move |x, wgt| estimates::quantiles_with_options(x, wgt, quantiles.clone(), quantile_type.clone())));
         self
     }
 
@@ -283,7 +284,7 @@ impl Analysis {
 
         for key in keys {
             let result = replicate_estimates(
-                Arc::new(self.estimate.as_ref().unwrap().clone()),
+                self.estimate.as_ref().unwrap().clone(),
                 x_split.get(&key).unwrap(),
                 wgt_split.get(&key).unwrap(),
                 repwgt_split.get(&key).unwrap(),
@@ -344,7 +345,10 @@ impl Analysis {
             repwgts: self.repwgts.clone(),
             variance_adjustment_factor: self.variance_adjustment_factor,
             estimate_name: self.estimate_name.clone(),
-            estimate: self.estimate.clone(),
+            estimate: match &self.estimate {
+                None => None,
+                Some(estimate) => Some(Arc::clone(estimate)),
+            },
             groups: self.groups.clone(),
             quantiles: self.quantiles.clone(),
             quantile_type: self.quantile_type.clone(),
@@ -357,6 +361,7 @@ mod tests {
     use nalgebra::{dmatrix, dvector};
     use crate::analysis::*;
     use crate::assert_approx_eq_iter_f64;
+    use crate::estimates::QuantileType;
 
     #[test]
     fn test_for_data() {
@@ -728,6 +733,35 @@ mod tests {
         assert_approx_eq_iter_f64!(second_result.sampling_variances(), dvector![1.156444], 1e-6);
         assert_approx_eq_iter_f64!(second_result.imputation_variances(), dvector![0.2514576], 1e-6);
         assert_approx_eq_iter_f64!(second_result.standard_errors(), dvector![1.212752], 1e-6);
+    }
+
+    #[test]
+    fn test_quantiles_setting() {
+        let data = DMatrix::from_row_slice(10, 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
+
+        let mut analysis = analysis();
+        analysis
+            .for_data(Imputation::No(&data))
+            .quantiles();
+
+        let result_default = analysis.calculate().unwrap();
+        assert_eq!(result_default[&vec!["overall".to_string()]].parameter_names(), &vec!["quantile_x1_0.25", "quantile_x1_0.5", "quantile_x1_0.75"]);
+        assert_approx_eq_iter_f64!(result_default[&vec!["overall".to_string()]].final_estimates(), &dvector![2.5, 5.0, 7.5]);
+
+        analysis
+            .set_quantiles(vec![0.2, 0.4, 0.6, 0.8]);
+
+        let result_quintiles = analysis.calculate().unwrap();
+        assert_eq!(result_quintiles[&vec!["overall".to_string()]].parameter_names(), &vec!["quantile_x1_0.2", "quantile_x1_0.4", "quantile_x1_0.6", "quantile_x1_0.8"]);
+        assert_approx_eq_iter_f64!(result_quintiles[&vec!["overall".to_string()]].final_estimates(), &dvector![2.0, 4.0, 6.0, 8.0]);
+
+        analysis
+            .set_quantiles(vec![0.75, 0.25])
+            .set_quantile_type(QuantileType::Lower);
+
+        let result_lower = analysis.calculate().unwrap();
+        assert_eq!(result_lower[&vec!["overall".to_string()]].parameter_names(), &vec!["quantile_x1_0.25", "quantile_x1_0.75"]);
+        assert_approx_eq_iter_f64!(result_lower[&vec!["overall".to_string()]].final_estimates(), &dvector![2.0, 7.0]);
     }
 
     #[test]
