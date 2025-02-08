@@ -1,7 +1,10 @@
 library(BIFIEsurvey)
-rm(list=ls())
 
-# artificial data
+rm(list=ls())
+source("./quantiles.R")
+options(scipen = 99)
+
+# artificial data ----
 
 df_wgts = data.frame(
   wgt = c(1.0, 1.0, 1.25, 1.25, 1.5, 1.5, 1.75, 1.75, 2.0, 2.0),
@@ -40,12 +43,29 @@ res <- BIFIE.univar(dat.BO, "x", group = "y")
 res$stat_M
 res$stat_SD
 
-# PIRLS 2021 AUT data
+# PIRLS 2021 AUT data ----
 
 df_pirls_2021_aut <- read.csv("./data/asgautr5.csv", header = TRUE, sep = ";")
 df_pirls_2021_aut_BO <- BIFIE.data.jack(df_pirls_2021_aut, wgt = "TOTWGT", jktype = "JK_TIMSS2", pv_vars = c("ASRREA", "ASRLIT", "ASRINF", "ASRIIE", "ASRRSI", "ASRIBM"), cdata = TRUE)
-
 summary(df_pirls_2021_aut_BO)
+
+## correlations ----
+#no groups
+res <- BIFIE.correl(df_pirls_2021_aut_BO, vars = c("ITSEX", "ASRREA"))
+res$stat.cor
+res$stat.cov
+#groups
 res <- BIFIE.correl(df_pirls_2021_aut_BO, vars = c("ITSEX", "ASRREA"), group = "ASRIBM")
 res$stat.cor
 res$stat.cov
+
+## quantiles ----
+#lower
+res <- lsanalyzer_func_quantile(df_pirls_2021_aut_BO, vars = c("ASRREA", "ASBG11F"), breaks = c(0.1, 0.25, 0.5, 0.75, 0.9), useInterpolation = FALSE, group = "ITSEX")
+res$stat
+#interpolation
+res <- lsanalyzer_func_quantile(df_pirls_2021_aut_BO, vars = c("ASRREA", "ASBG11F"), breaks = c(0.1, 0.25, 0.5, 0.75, 0.9), group = "ITSEX")
+res$stat
+#upper
+res <- lsanalyzer_func_quantile(df_pirls_2021_aut_BO, vars = c("ASRREA", "ASBG11F"), breaks = c(0.1, 0.25, 0.5, 0.75, 0.9), useInterpolation = FALSE, mimicIdbAnalyzer = TRUE, group = "ITSEX")
+res$stat
