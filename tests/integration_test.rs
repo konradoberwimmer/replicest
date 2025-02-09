@@ -3,6 +3,7 @@ use std::sync::Arc;
 use nalgebra::{dvector, DMatrix, DVector};
 use replicest::{assert_approx_eq_iter_f64, estimates, replication};
 use replicest::analysis::{analysis, Imputation};
+use replicest::estimates::QuantileType;
 
 fn fetch_test_dataset() -> (Vec<DMatrix<f64>>, DVector<f64>, DMatrix<f64>) {
     let mut reader_builder = csv::ReaderBuilder::new();
@@ -249,4 +250,47 @@ fn test_analysis_correlation_for_pirls_2021_aut() {
     assert_approx_eq_iter_f64!(result[&vec!["3".to_string()]].standard_errors(), vec![0.001063050, 0.410383983,  13.879319117, 0.0, 0.03882064, 0.0], 1e-8);
     assert_approx_eq_iter_f64!(result[&vec!["4".to_string()]].standard_errors(), vec![0.001165612, 0.486794874,  18.459875205, 0.0, 0.04666934, 0.0], 1e-8);
     assert_approx_eq_iter_f64!(result[&vec!["5".to_string()]].standard_errors(), vec![0.010483638, 0.878510479,  59.264497664, 0.0, 0.08172591, 0.0], 1e-8);
+}
+
+#[test]
+fn test_analysis_quantiles_for_pirls_2021_aut() {
+    let (data, groups, wgt, repwgt) = fetch_pirls_2021_aut_dataset(&["ASRREA", "ASBG11F"], &["ITSEX"]);
+
+    let mut analysis = analysis();
+    analysis
+        .set_quantiles(vec![0.1, 0.25, 0.5, 0.75, 0.9])
+        .set_weights(&wgt)
+        .with_replicate_weights(&repwgt)
+        .set_variance_adjustment_factor(0.5);
+
+    analysis
+        .for_data(Imputation::Yes(&Vec::from_iter(data.iter())))
+        .group_by(Imputation::No(&groups[0]));
+
+    // interpolation
+    let result = analysis.calculate().unwrap();
+    assert_eq!(2, result.len());
+
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].final_estimates(), vec![444.2822, 493.0302, 541.4727, 585.4381, 621.7875, 2.0, 3.0, 4.0, 4.0, 4.0], 1e-4);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].final_estimates(), vec![433.2165, 479.4167, 526.2463, 570.4911, 605.8992, 1.0, 2.0, 3.0, 4.0, 4.0], 1e-4);
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].standard_errors(), vec![3.687901, 3.240294, 3.235368, 3.642689, 3.904372, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].standard_errors(), vec![4.816250, 3.313965, 3.316024, 2.214735, 4.010058, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
+
+    // lower
+    let result = analysis.set_quantile_type(QuantileType::Lower).calculate().unwrap();
+    assert_eq!(2, result.len());
+
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].final_estimates(), vec![444.2548, 492.9811, 541.4554, 585.3781, 621.7718, 2.0, 3.0, 4.0, 4.0, 4.0], 1e-4);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].final_estimates(), vec![432.9594, 479.3735, 526.1691, 570.4706, 605.8644, 1.0, 2.0, 3.0, 4.0, 4.0], 1e-4);
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].standard_errors(), vec![3.886959, 3.365775, 3.241325, 3.826502, 4.006372, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].standard_errors(), vec![5.424125, 3.358906, 3.361783, 2.313668, 4.132135, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
+
+    // upper
+    let result = analysis.set_quantile_type(QuantileType::Upper).calculate().unwrap();
+    assert_eq!(2, result.len());
+
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].final_estimates(), vec![444.3502, 493.0477, 541.5133, 585.4589, 621.8232, 2.0, 3.0, 4.0, 4.0, 4.0], 1e-4);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].final_estimates(), vec![433.3920, 479.4379, 526.2809, 570.5180, 605.9277, 1.0, 2.0, 3.0, 4.0, 4.0], 1e-4);
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].standard_errors(), vec![3.719583, 3.270532, 3.285723, 3.614068, 4.003227, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].standard_errors(), vec![4.930214, 3.329603, 3.304684, 2.236800, 4.061026, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
 }

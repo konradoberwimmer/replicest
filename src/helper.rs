@@ -116,19 +116,47 @@ impl Split<DVector<f64>> for DVector<f64> {
     }
 }
 
+#[derive(PartialEq, Clone, Debug)]
+pub struct F64Count {
+    key: f64,
+    count_cases: usize,
+    first_weight: f64,
+    count_weighted: f64,
+}
+
+impl F64Count {
+    pub fn init(key: f64, count_cases: usize, first_weight: f64, count_weighted: f64) -> F64Count {
+        F64Count { key, count_cases, first_weight, count_weighted }
+    }
+
+    pub fn get_key(&self) -> f64 {
+        self.key
+    }
+
+    pub fn get_count_cases(&self) -> usize {
+        self.count_cases
+    }
+
+    pub fn get_first_weight(&self) -> f64 {
+        self.first_weight
+    }
+
+    pub fn get_count_weighted(&self) -> f64 {
+        self.count_weighted
+    }
+}
+
 pub struct OrderedF64Counts {
-    keys: Vec<f64>,
-    counts_unweighted: Vec<f64>,
-    counts_weighted: Vec<f64>,
+    counts: Vec<F64Count>,
+    sum_of_cases: usize,
     sum_of_weights: f64,
 }
 
 impl OrderedF64Counts {
     pub fn new() -> OrderedF64Counts {
         OrderedF64Counts {
-            keys: Vec::new(),
-            counts_unweighted: Vec::new(),
-            counts_weighted: Vec::new(),
+            counts: Vec::new(),
+            sum_of_cases: 0,
             sum_of_weights: 0.0,
         }
     }
@@ -138,35 +166,41 @@ impl OrderedF64Counts {
             return;
         }
 
+        self.sum_of_cases += 1;
         self.sum_of_weights += weight;
 
-        for pp in 0..self.keys.len() {
-            if (self.keys[pp] - key).abs() < f64::EPSILON {
-                self.counts_unweighted[pp] += 1.0;
-                self.counts_weighted[pp] += weight;
+        for pp in 0..self.counts.len() {
+            if self.counts[pp].key == key {
+                self.counts[pp].count_cases += 1;
+                self.counts[pp].count_weighted += weight;
                 return;
             }
 
-            if self.keys[pp] > key {
-                self.keys.insert(pp, key);
-                self.counts_unweighted.insert(pp, 1.0);
-                self.counts_weighted.insert(pp, weight);
+            if self.counts[pp].key > key {
+                self.counts.insert(pp, F64Count {
+                    key,
+                    count_cases: 1,
+                    first_weight: weight,
+                    count_weighted: weight,
+                });
                 return;
             }
         }
 
-        self.keys.push(key);
-        self.counts_unweighted.push(1.0);
-        self.counts_weighted.push(weight);
+        self.counts.push(F64Count {
+            key,
+            count_cases: 1,
+            first_weight: weight,
+            count_weighted: weight,
+        });
     }
 
-    pub fn get_counts(&self) -> Vec<(f64, f64, f64)> {
-        Vec::from_iter(
-            self.keys.iter().cloned().zip(
-                self.counts_unweighted.iter().cloned().zip(
-                    self.counts_weighted.iter().cloned()
-                )).map(|(v, (u, w))| (v, u, w))
-        )
+    pub fn get_counts(&self) -> &Vec<F64Count> {
+        self.counts.as_ref()
+    }
+
+    pub fn get_sum_of_cases(&self) -> usize {
+        self.sum_of_cases
     }
 
     pub fn get_sum_of_weights(&self) -> f64 {
@@ -359,9 +393,11 @@ mod tests {
         order_weighted_f64_counts.push(1.0, 1.0);
 
         assert_eq!(2, order_weighted_f64_counts.get_counts().len());
-        assert!((order_weighted_f64_counts.get_counts()[0].0 - 1.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[0].1 - 1.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[0].2 - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].key - 1.0).abs() < f64::EPSILON);
+        assert_eq!(order_weighted_f64_counts.get_counts()[0].count_cases, 1);
+        assert!((order_weighted_f64_counts.get_counts()[0].count_weighted - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].first_weight - 1.0).abs() < f64::EPSILON);
+        assert_eq!(order_weighted_f64_counts.get_sum_of_cases(), 2);
         assert!((order_weighted_f64_counts.get_sum_of_weights() - 2.0).abs() < f64::EPSILON);
 
         order_weighted_f64_counts.push(1.0, 1.5);
@@ -369,15 +405,18 @@ mod tests {
         order_weighted_f64_counts.push(1.0, 1.5);
 
         assert_eq!(3, order_weighted_f64_counts.get_counts().len());
-        assert!((order_weighted_f64_counts.get_counts()[0].0 - 1.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[0].1 - 3.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[0].2 - 4.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[1].0 - 1.5).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[1].1 - 1.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[1].2 - 0.75).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[2].0 - 2.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[2].1 - 1.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[2].2 - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].key - 1.0).abs() < f64::EPSILON);
+        assert_eq!(order_weighted_f64_counts.get_counts()[0].count_cases, 3);
+        assert!((order_weighted_f64_counts.get_counts()[0].first_weight - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].count_weighted - 4.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[1].key - 1.5).abs() < f64::EPSILON);
+        assert_eq!(order_weighted_f64_counts.get_counts()[1].count_cases, 1);
+        assert!((order_weighted_f64_counts.get_counts()[1].first_weight - 0.75).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[1].count_weighted - 0.75).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[2].key - 2.0).abs() < f64::EPSILON);
+        assert_eq!(order_weighted_f64_counts.get_counts()[2].count_cases, 1);
+        assert!((order_weighted_f64_counts.get_counts()[2].first_weight - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[2].count_weighted - 1.0).abs() < f64::EPSILON);
         assert!((order_weighted_f64_counts.get_sum_of_weights() - 5.75).abs() < f64::EPSILON);
     }
 
@@ -389,8 +428,8 @@ mod tests {
         order_weighted_f64_counts.push(f64::NAN, 1.0);
 
         assert_eq!(1, order_weighted_f64_counts.get_counts().len());
-        assert!((order_weighted_f64_counts.get_counts()[0].0 - 2.0).abs() < f64::EPSILON);
-        assert!((order_weighted_f64_counts.get_counts()[0].1 - 1.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].key - 2.0).abs() < f64::EPSILON);
+        assert!((order_weighted_f64_counts.get_counts()[0].count_weighted - 1.0).abs() < f64::EPSILON);
         assert!((order_weighted_f64_counts.get_sum_of_weights() - 1.0).abs() < f64::EPSILON);
     }
 

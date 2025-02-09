@@ -52,29 +52,38 @@ pub fn quantiles_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, quantiles: V
     let mut parameter_names = Vec::new();
     let mut estimates = DVector::from_element(counts.len() * quantiles.len(), f64::NAN);
 
-    for (cc, count) in counts.iter().enumerate() {
+    for (cc, count_column) in counts.iter().enumerate() {
         let mut cumulative_weight = 0.0;
         let mut current_quantile = 0;
 
-        for (vv, (value, _, weight)) in count.get_counts().iter().enumerate() {
-            cumulative_weight += weight;
-            let percent_change = weight / count.get_sum_of_weights();
-            let cumulative_percent = cumulative_weight / count.get_sum_of_weights();
+        for (vv, count) in count_column.get_counts().iter().enumerate() {
+            let old_cumulative_weight = cumulative_weight;
+            cumulative_weight += count.get_count_weighted();
+            let cumulative_percent = cumulative_weight / count_column.get_sum_of_weights();
 
             while current_quantile < ordered_quantiles.len() && cumulative_percent > ordered_quantiles[current_quantile] {
                 parameter_names.push(format!("quantile_x{}_{}", cc + 1, ordered_quantiles[current_quantile]));
-                match quantile_type {
-                    QuantileType::Lower => {
-                        estimates[cc * quantiles.len() + current_quantile] = if vv > 0 { count.get_counts()[vv - 1].0 } else { *value };
-                    }
-                    QuantileType::Interpolation => {
-                        estimates[cc * quantiles.len() + current_quantile] = if vv > 0 {
-                            let lower = count.get_counts()[vv - 1].0;
-                            lower + (value - lower) * (ordered_quantiles[current_quantile] - (cumulative_percent - percent_change)) / (percent_change + f64::EPSILON)
-                        } else { *value };
-                    }
-                    QuantileType::Upper => {
-                        estimates[cc * quantiles.len() + current_quantile] = *value;
+
+                let raised_weight = old_cumulative_weight + count.get_first_weight();
+                let raised_percent = raised_weight / count_column.get_sum_of_weights();
+
+                if raised_percent <= ordered_quantiles[current_quantile] {
+                    estimates[cc * quantiles.len() + current_quantile] = count.get_key();
+                } else {
+                    match quantile_type {
+                        QuantileType::Lower => {
+                            estimates[cc * quantiles.len() + current_quantile] = if vv > 0 { count_column.get_counts()[vv - 1].get_key() } else { count.get_key() };
+                        }
+                        QuantileType::Interpolation => {
+                            let percent_change = count.get_first_weight() / count_column.get_sum_of_weights();
+                            estimates[cc * quantiles.len() + current_quantile] = if vv > 0 {
+                                let lower = count_column.get_counts()[vv - 1].get_key();
+                                lower + (count.get_key() - lower) * (ordered_quantiles[current_quantile] - old_cumulative_weight / count_column.get_sum_of_weights()) / (percent_change + f64::EPSILON)
+                            } else { count.get_key() };
+                        }
+                        QuantileType::Upper => {
+                            estimates[cc * quantiles.len() + current_quantile] = count.get_key();
+                        }
                     }
                 }
                 current_quantile += 1;
@@ -87,7 +96,7 @@ pub fn quantiles_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, quantiles: V
 
         while current_quantile < ordered_quantiles.len() {
             parameter_names.push(format!("quantile_x{}_{}", cc + 1, ordered_quantiles[current_quantile]));
-            estimates[cc * quantiles.len() + current_quantile] = count.get_counts().last().unwrap().0;
+            estimates[cc * quantiles.len() + current_quantile] = count_column.get_counts().last().unwrap().get_key();
             current_quantile += 1;
         }
     }
@@ -188,6 +197,7 @@ mod tests {
     use nalgebra::{dvector};
     use rand::prelude::*;
     use crate::assert_approx_eq_iter_f64;
+    use crate::helper::F64Count;
     use super::*;
 
     #[test]
@@ -213,15 +223,15 @@ mod tests {
         assert_eq!(2, result.len());
 
         assert_eq!(2, result[0].get_counts().len());
-        assert_eq!((1.0, 8.0, 7.0), result[0].get_counts()[0]);
-        assert_eq!((2.0, 4.0, 5.0), result[0].get_counts()[1]);
+        assert_eq!(F64Count::init(1.0, 8, 1.0, 7.0), result[0].get_counts()[0]);
+        assert_eq!(F64Count::init(2.0, 4, 0.5, 5.0), result[0].get_counts()[1]);
         assert_eq!(12.0, result[0].get_sum_of_weights());
 
         assert_eq!(4, result[1].get_counts().len());
-        assert_eq!((1.0, 3.0, 3.5), result[1].get_counts()[0]);
-        assert_eq!((2.0, 1.0, 1.5), result[1].get_counts()[1]);
-        assert_eq!((3.0, 4.0, 4.5), result[1].get_counts()[2]);
-        assert_eq!((4.0, 4.0, 2.5), result[1].get_counts()[3]);
+        assert_eq!(F64Count::init(1.0, 3, 0.5, 3.5), result[1].get_counts()[0]);
+        assert_eq!(F64Count::init(2.0, 1, 1.5, 1.5), result[1].get_counts()[1]);
+        assert_eq!(F64Count::init(3.0, 4, 1.0, 4.5), result[1].get_counts()[2]);
+        assert_eq!(F64Count::init(4.0, 4, 1.0, 2.5), result[1].get_counts()[3]);
         assert_eq!(12.0, result[1].get_sum_of_weights());
     }
 
@@ -302,7 +312,7 @@ mod tests {
         assert_eq!(result.parameter_names[0], "quantile_x1_0.1");
         assert_eq!(result.parameter_names[8], "quantile_x2_0.75");
         assert_eq!(result.estimates, dvector![
-            1.0, 1.0, 2.0, 2.0, 2.0, 1.75, 1.75, 1.75, 3.0, 3.0
+            1.0, 1.0, 2.0, 3.0, 3.0, 1.75, 1.75, 3.0, 3.0, 4.0
         ]);
     }
 
@@ -328,7 +338,7 @@ mod tests {
         assert_eq!(result.parameter_names[1], "quantile_x1_0.5");
         assert_eq!(result.parameter_names[5], "quantile_x2_0.75");
         assert_approx_eq_iter_f64!(result.estimates, dvector![
-            1.0, 2.090909090909091, 2.5454545454545454, 1.9772727272727273, 2.5454545454545454, 3.1666666666666665
+            1.0, 2.3333333333333333, 3.0, 2.5833333333333333, 3.0, 3.5
         ]);
     }
 
