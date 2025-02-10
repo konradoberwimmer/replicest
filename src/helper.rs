@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use nalgebra::{DMatrix, DVector, Dim, Matrix, RawStorage};
 
 pub trait ExtractValues {
@@ -116,17 +118,71 @@ impl Split<DVector<f64>> for DVector<f64> {
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
-pub struct F64Count {
+struct MutableF64Count {
+    key: f64,
+    count_cases: RefCell<usize>,
+    first_weight: RefCell<f64>,
+    count_weighted: RefCell<f64>,
+}
+
+impl MutableF64Count {
+    pub fn init(key: f64, count_cases: usize, first_weight: f64, count_weighted: f64) -> MutableF64Count {
+        MutableF64Count {
+            key,
+            count_cases: RefCell::new(count_cases),
+            first_weight: RefCell::new(first_weight),
+            count_weighted: RefCell::new(count_weighted),
+        }
+    }
+}
+
+impl Ord for MutableF64Count {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.key > other.key {
+            Ordering::Greater
+        } else if self.key < other.key {
+            Ordering::Less
+        } else {
+            Ordering::Equal
+        }
+    }
+}
+
+impl PartialOrd for MutableF64Count {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for MutableF64Count {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for MutableF64Count {}
+
+impl Clone for MutableF64Count {
+    fn clone(&self) -> Self {
+        MutableF64Count {
+            key: self.key,
+            count_cases: RefCell::new(0),
+            first_weight: RefCell::new(0.0),
+            count_weighted: RefCell::new(0.0),
+        }
+    }
+}
+
+pub struct ImmutableF64Count {
     key: f64,
     count_cases: usize,
     first_weight: f64,
     count_weighted: f64,
 }
 
-impl F64Count {
-    pub fn init(key: f64, count_cases: usize, first_weight: f64, count_weighted: f64) -> F64Count {
-        F64Count { key, count_cases, first_weight, count_weighted }
+impl ImmutableF64Count {
+    pub fn init(key: f64, count_cases: usize, first_weight: f64, count_weighted: f64) -> Self {
+        ImmutableF64Count { key, count_cases, first_weight, count_weighted }
     }
 
     pub fn get_key(&self) -> f64 {
@@ -146,8 +202,19 @@ impl F64Count {
     }
 }
 
+#[macro_export]
+macro_rules! assert_f64count_eq {
+    ( $x: expr, $y: expr ) => {
+        assert_eq!($x.get_key(), $y.get_key(), "unequal key: left {:?}, right {:?}", $x.get_key(), $y.get_key());
+        assert_eq!($x.get_count_cases(), $y.get_count_cases(), "unequal count cases: left {:?}, right {:?}", $x.get_count_cases(), $y.get_count_cases());
+        assert_eq!($x.get_first_weight(), $y.get_first_weight(), "unequal first weight: left {:?}, right {:?}", $x.get_first_weight(), $y.get_first_weight());
+        assert_eq!($x.get_count_weighted(), $y.get_count_weighted(), "unequal key: left {:?}, right {:?}", $x.get_count_weighted(), $y.get_count_weighted());
+    };
+}
+
+
 pub struct OrderedF64Counts {
-    counts: Vec<F64Count>,
+    counts: BTreeSet<MutableF64Count>,
     sum_of_cases: usize,
     sum_of_weights: f64,
 }
@@ -155,7 +222,7 @@ pub struct OrderedF64Counts {
 impl OrderedF64Counts {
     pub fn new() -> OrderedF64Counts {
         OrderedF64Counts {
-            counts: Vec::new(),
+            counts: BTreeSet::new(),
             sum_of_cases: 0,
             sum_of_weights: 0.0,
         }
@@ -169,34 +236,18 @@ impl OrderedF64Counts {
         self.sum_of_cases += 1;
         self.sum_of_weights += weight;
 
-        for pp in 0..self.counts.len() {
-            if self.counts[pp].key == key {
-                self.counts[pp].count_cases += 1;
-                self.counts[pp].count_weighted += weight;
-                return;
-            }
+        let dummy = MutableF64Count::init(key, 1, weight, weight);
 
-            if self.counts[pp].key > key {
-                self.counts.insert(pp, F64Count {
-                    key,
-                    count_cases: 1,
-                    first_weight: weight,
-                    count_weighted: weight,
-                });
-                return;
-            }
+        if self.counts.contains(&dummy) {
+            *self.counts.get(&dummy).unwrap().count_cases.borrow_mut() += 1;
+            *self.counts.get(&dummy).unwrap().count_weighted.borrow_mut() += weight;
+        } else {
+            self.counts.insert(dummy);
         }
-
-        self.counts.push(F64Count {
-            key,
-            count_cases: 1,
-            first_weight: weight,
-            count_weighted: weight,
-        });
     }
 
-    pub fn get_counts(&self) -> &Vec<F64Count> {
-        self.counts.as_ref()
+    pub fn get_counts(&self) -> Vec<ImmutableF64Count> {
+        Vec::from_iter(self.counts.iter().map(|count| ImmutableF64Count::init(count.key, count.count_cases.borrow().to_owned(), count.first_weight.borrow().to_owned(), count.count_weighted.borrow().to_owned())))
     }
 
     pub fn get_sum_of_cases(&self) -> usize {
@@ -383,6 +434,19 @@ mod tests {
         assert_eq!(13.0, result[&vec!["1".to_string(), "1".to_string()]][1]);
         assert_eq!(1, result[&vec!["2".to_string(), "2".to_string()]].nrows());
         assert_eq!(10.0, result[&vec!["2".to_string(), "2".to_string()]][0]);
+    }
+
+    #[test]
+    fn test_f64count() {
+        let count1 = MutableF64Count::init(2.3, 4, 17.99, 138.2);
+        let count2 = MutableF64Count::init(1.8, 2, 17.99, 99.6);
+        let count3 = MutableF64Count::init(2.3, 0, 0.0, 0.0);
+
+        assert!(count1 != count2);
+        assert!(count1 == count3);
+
+        assert_eq!(count1.cmp(&count2), Ordering::Greater);
+        assert_eq!(count1.cmp(&count3), Ordering::Equal);
     }
 
     #[test]

@@ -196,8 +196,8 @@ pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
 mod tests {
     use nalgebra::{dvector};
     use rand::prelude::*;
-    use crate::assert_approx_eq_iter_f64;
-    use crate::helper::F64Count;
+    use crate::{assert_approx_eq_iter_f64, assert_f64count_eq};
+    use crate::helper::ImmutableF64Count;
     use super::*;
 
     #[test]
@@ -223,15 +223,15 @@ mod tests {
         assert_eq!(2, result.len());
 
         assert_eq!(2, result[0].get_counts().len());
-        assert_eq!(F64Count::init(1.0, 8, 1.0, 7.0), result[0].get_counts()[0]);
-        assert_eq!(F64Count::init(2.0, 4, 0.5, 5.0), result[0].get_counts()[1]);
+        assert_f64count_eq!(ImmutableF64Count::init(1.0, 8, 1.0, 7.0), result[0].get_counts()[0]);
+        assert_f64count_eq!(ImmutableF64Count::init(2.0, 4, 0.5, 5.0), result[0].get_counts()[1]);
         assert_eq!(12.0, result[0].get_sum_of_weights());
 
         assert_eq!(4, result[1].get_counts().len());
-        assert_eq!(F64Count::init(1.0, 3, 0.5, 3.5), result[1].get_counts()[0]);
-        assert_eq!(F64Count::init(2.0, 1, 1.5, 1.5), result[1].get_counts()[1]);
-        assert_eq!(F64Count::init(3.0, 4, 1.0, 4.5), result[1].get_counts()[2]);
-        assert_eq!(F64Count::init(4.0, 4, 1.0, 2.5), result[1].get_counts()[3]);
+        assert_f64count_eq!(ImmutableF64Count::init(1.0, 3, 0.5, 3.5), result[1].get_counts()[0]);
+        assert_f64count_eq!(ImmutableF64Count::init(2.0, 1, 1.5, 1.5), result[1].get_counts()[1]);
+        assert_f64count_eq!(ImmutableF64Count::init(3.0, 4, 1.0, 4.5), result[1].get_counts()[2]);
+        assert_f64count_eq!(ImmutableF64Count::init(4.0, 4, 1.0, 2.5), result[1].get_counts()[3]);
         assert_eq!(12.0, result[1].get_sum_of_weights());
     }
 
