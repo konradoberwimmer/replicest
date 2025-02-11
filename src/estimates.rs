@@ -31,6 +31,32 @@ fn weighted_count_values(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Vec<OrderedF64
     counts
 }
 
+pub fn frequencies(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
+    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in frequencies");
+    assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in frequencies");
+
+    let counts = weighted_count_values(&x, &wgt);
+
+    let mut parameter_names = Vec::new();
+    let mut estimates : Vec<f64> = Vec::new();
+
+    for (cc, count_column) in counts.iter().enumerate() {
+        for count in count_column.get_counts().iter() {
+            parameter_names.push(format!("ncases_x{}_{}", cc + 1, count.get_key()));
+            estimates.push(count.get_count_cases() as f64);
+            parameter_names.push(format!("nweighted_x{}_{}", cc + 1, count.get_key()));
+            estimates.push(count.get_count_weighted());
+            parameter_names.push(format!("perc_x{}_{}", cc + 1, count.get_key()));
+            estimates.push(count.get_count_weighted() / count_column.get_sum_of_weights());
+        }
+    }
+
+    Estimates {
+        parameter_names,
+        estimates : DVector::from_vec(estimates),
+    }
+}
+
 #[derive(Clone)]
 pub enum QuantileType {
     Lower,
@@ -39,7 +65,7 @@ pub enum QuantileType {
 }
 
 pub fn quantiles_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, quantiles: Vec<f64>, quantile_type: QuantileType) -> Estimates {
-    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in mean");
+    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in quantiles");
     assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in quantiles");
     assert!(quantiles.len() > 0, "quantiles are empty");
     assert_eq!(0, quantiles.iter().filter(|e| e.is_nan()).count(), "quantiles contain NaNs");
@@ -236,7 +262,62 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dimension mismatch of x and wgt in mean")]
+    #[should_panic(expected = "dimension mismatch of x and wgt in frequencies")]
+    fn test_frequencies_panic_dimension_mismatch() {
+        let data = DMatrix::from_row_slice(2, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        frequencies(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "wgt contains NaN in frequencies")]
+    fn test_frequencies_panic_wgt_containing_nan() {
+        let data = DMatrix::from_row_slice(3, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+            3.0, 3.0, 1.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, f64::NAN];
+
+        frequencies(&data, &wgt);
+    }
+
+    #[test]
+    fn test_frequencies() {
+        let data = DMatrix::from_row_slice(10, 2, &[
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            1.0, 4.0,
+            2.0, 1.75,
+            3.0, 3.0,
+            3.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0];
+
+        let result = frequencies(&data, &wgt);
+        assert_eq!(result.parameter_names.len(), 18);
+        assert_eq!(result.parameter_names[0], "ncases_x1_1");
+        assert_eq!(result.parameter_names[4], "nweighted_x1_2");
+        assert_eq!(result.parameter_names[8], "perc_x1_3");
+        assert_eq!(result.parameter_names[9], "ncases_x2_1.75");
+        assert_eq!(result.parameter_names[13], "nweighted_x2_3");
+        assert_eq!(result.parameter_names[17], "perc_x2_4");
+        assert_eq!(result.estimates, dvector![3.0, 3.0, 0.3, 3.0, 1.5, 0.15, 4.0, 5.5, 0.55, 3.0, 1.5, 0.15, 4.0, 5.5, 0.55, 3.0, 3.0, 0.3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "dimension mismatch of x and wgt in quantiles")]
     fn test_quantiles_panic_dimension_mismatch() {
         let data = DMatrix::from_row_slice(2, 3, &[
             1.0, 4.0, 2.5,
