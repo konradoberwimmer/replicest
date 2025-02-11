@@ -63,6 +63,39 @@ pub fn frequencies(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     }
 }
 
+pub fn missings(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
+    assert_validity_of_data_and_weights!(x, wgt, "missings");
+
+    let mut parameter_names = Vec::new();
+    let mut estimates : Vec<f64> = Vec::new();
+
+    let sum_of_weights = wgt.sum();
+
+    for (cc, column) in x.column_iter().enumerate() {
+        let missingcases = column.iter().filter(|e| e.is_nan()).count();
+        let missingweights = column.iter().zip(wgt.iter()).filter(|(e, _)| e.is_nan()).map(|(_, wgt)| wgt).sum();
+
+        parameter_names.push(format!("missingcases_x{}", cc + 1));
+        estimates.push(missingcases as f64);
+        parameter_names.push(format!("missingweights_x{}", cc + 1));
+        estimates.push(missingweights);
+        parameter_names.push(format!("percmissing_x{}", cc + 1));
+        estimates.push(missingweights / sum_of_weights);
+
+        parameter_names.push(format!("validcases_x{}", cc + 1));
+        estimates.push((column.len() - missingcases) as f64);
+        parameter_names.push(format!("validweights_x{}", cc + 1));
+        estimates.push(sum_of_weights - missingweights);
+        parameter_names.push(format!("percvalid_x{}", cc + 1));
+        estimates.push((sum_of_weights - missingweights) / sum_of_weights);
+    }
+
+    Estimates {
+        parameter_names,
+        estimates: DVector::from_vec(estimates),
+    }
+}
+
 #[derive(Clone)]
 pub enum QuantileType {
     Lower,
@@ -317,6 +350,59 @@ mod tests {
         assert_eq!(result.parameter_names[13], "nweighted_x2_3");
         assert_eq!(result.parameter_names[17], "perc_x2_4");
         assert_eq!(result.estimates, dvector![3.0, 3.0, 0.3, 3.0, 1.5, 0.15, 4.0, 5.5, 0.55, 3.0, 1.5, 0.15, 4.0, 5.5, 0.55, 3.0, 3.0, 0.3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "dimension mismatch of x and wgt in missings")]
+    fn test_missings_panic_dimension_mismatch() {
+        let data = DMatrix::from_row_slice(2, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        missings(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "wgt contains NaN in missings")]
+    fn test_missings_panic_wgt_containing_nan() {
+        let data = DMatrix::from_row_slice(3, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+            3.0, 3.0, 1.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, f64::NAN];
+
+        missings(&data, &wgt);
+    }
+
+    #[test]
+    fn test_missings() {
+        let data = DMatrix::from_row_slice(10, 2, &[
+            1.0, 4.0,
+            f64::NAN, 1.75,
+            3.0, 3.0,
+            f64::NAN, f64::NAN,
+            f64::NAN, f64::NAN,
+            3.0, 3.0,
+            f64::NAN, 4.0,
+            2.0, 1.75,
+            f64::NAN, 3.0,
+            3.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0];
+
+        let result = missings(&data, &wgt);
+        assert_eq!(result.parameter_names.len(), 12);
+        assert_eq!(result.parameter_names[0], "missingcases_x1");
+        assert_eq!(result.parameter_names[5], "percvalid_x1");
+        assert_eq!(result.parameter_names[6], "missingcases_x2");
+        assert_eq!(result.parameter_names[11], "percvalid_x2");
+        assert_eq!(result.estimates, dvector![5.0, 4.5, 0.45, 5.0, 5.5, 0.55, 2.0, 1.5, 0.15, 8.0, 8.5, 0.85]);
     }
 
     #[test]
