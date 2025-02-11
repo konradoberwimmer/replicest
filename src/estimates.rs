@@ -31,9 +31,15 @@ fn weighted_count_values(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Vec<OrderedF64
     counts
 }
 
+macro_rules! assert_validity_of_data_and_weights {
+    ( $x: expr, $wgt: expr, $estimate_name: expr ) => {
+        assert_eq!($x.nrows(), $wgt.len(), "dimension mismatch of x and wgt in {}", $estimate_name);
+        assert_eq!(0, $wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in {}", $estimate_name);
+    };
+}
+
 pub fn frequencies(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
-    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in frequencies");
-    assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in frequencies");
+    assert_validity_of_data_and_weights!(x, wgt, "frequencies");
 
     let counts = weighted_count_values(&x, &wgt);
 
@@ -65,8 +71,7 @@ pub enum QuantileType {
 }
 
 pub fn quantiles_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, quantiles: Vec<f64>, quantile_type: QuantileType) -> Estimates {
-    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in quantiles");
-    assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in quantiles");
+    assert_validity_of_data_and_weights!(x, wgt, "quantiles");
     assert!(quantiles.len() > 0, "quantiles are empty");
     assert_eq!(0, quantiles.iter().filter(|e| e.is_nan()).count(), "quantiles contain NaNs");
 
@@ -138,8 +143,7 @@ pub fn quantiles(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
 }
 
 pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
-    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in mean");
-    assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in mean");
+    assert_validity_of_data_and_weights!(x, wgt, "mean");
 
     let x_transpose = x.transpose();
     let x_transpose_clean : DMatrix<f64> = x_transpose.map(|e| if e.is_nan() { 0.0_f64 } else { e });
@@ -155,8 +159,7 @@ pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
 }
 
 pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
-    assert_eq!(x.nrows(), wgt.len(), "dimension mismatch of x and wgt in correlation");
-    assert_eq!(0, wgt.iter().filter(|e| e.is_nan()).count(), "wgt contains NaN in correlation");
+    assert_validity_of_data_and_weights!(x, wgt, "correlation");
 
     let means = mean(&x, &wgt).estimates;
     let mut x_centered = DMatrix::<f64>::from_columns(
