@@ -1,5 +1,5 @@
-use nalgebra::{DMatrix, DVector};
 use crate::helper::{ExtractValues, OrderedF64Counts};
+use nalgebra::{DMatrix, DVector};
 
 pub struct Estimates {
     parameter_names: Vec<String>,
@@ -199,7 +199,7 @@ pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
         &Vec::from_iter(x.column_iter().enumerate().map(|(i, c)| c.clone_owned() - DVector::<f64>::from_element(c.nrows(), means[i])))
     );
 
-    // take care of NaN by setting such values as well as such weights to zero
+    // take care of NaN by setting such values as well as such weights to zero (pairwise)
     let mut weights_by_column : Vec<DVector<f64>> = Vec::new();
     for i in 0..x_centered.ncols() {
         weights_by_column.push(wgt.clone());
@@ -254,13 +254,103 @@ pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     }
 }
 
+pub fn linreg_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, intercept: bool) -> Estimates {
+    assert_validity_of_data_and_weights!(x, wgt, "linreg");
+    assert!(x.ncols() > 1 || intercept, "linear regression missing a predictor");
+
+    let dep = x.column(0).clone_owned();
+    let pre = if x.ncols() > 1 && intercept {
+        let mut pre = DMatrix::<f64>::zeros(x.nrows(), x.ncols());
+        pre.set_column(0, &DVector::<f64>::from_element(x.nrows(), 1.0));
+        for cc in 1..x.ncols() {
+            pre.set_column(cc, &x.column(cc));
+        }
+        pre
+    } else if x.ncols() > 1 && !intercept {
+        x.columns(1, x.ncols() - 1).clone_owned()
+    } else {
+        DMatrix::<f64>::from_element(x.nrows(), 1, 1.0)
+    };
+
+    let dep_weighted = DMatrix::<f64>::from_columns(
+        &Vec::from_iter(dep.column_iter().map(|c| c.component_mul(wgt)))
+    );
+    let pre_weighted = DMatrix::<f64>::from_columns(
+        &Vec::from_iter(pre.column_iter().map(|c| c.component_mul(wgt)))
+    );
+
+    let pre_transposed = pre.transpose();
+    let pre_transposed_weighted = &pre_transposed * pre_weighted;
+    let pre_transposed_dep = pre_transposed * dep_weighted;
+
+    let coeffs = pre_transposed_weighted.qr().solve(&pre_transposed_dep).expect("failed to solve linear regression");
+    assert_eq!(coeffs.ncols(), 1, "unrecognized coefficient vector");
+
+    let k = x.ncols() - 1 + intercept as usize;
+    let mut parameter_names = Vec::new();
+    let mut estimates = Vec::<f64>::new();
+
+    if intercept {
+        parameter_names.push("linreg_b_intercept".to_string());
+    }
+    for xx in 1..x.ncols() {
+        parameter_names.push(format!("linreg_b_X{}", xx));
+    }
+    coeffs.iter().for_each(|v| estimates.push(*v));
+
+    let sum_of_weights = wgt.sum();
+    let errors = &dep - (pre * &coeffs);
+    let sum_of_squared_errors = DVector::<f64>::from_iterator(dep.nrows(), errors.iter().map(|v| v.powf(2.0))).component_mul(&wgt).sum();
+    let sigma = (sum_of_squared_errors / (sum_of_weights - k as f64)).sqrt();
+    let dep_mean = &dep.component_mul(&wgt).sum() / sum_of_weights;
+    let sum_of_squared_total = DVector::<f64>::from_iterator(dep.nrows(), dep.iter().map(|v| (v - dep_mean).powf(2.0))).component_mul(&wgt).sum();
+    let r2 = 1.0 - sum_of_squared_errors / sum_of_squared_total;
+
+    parameter_names.push("linreg_sigma".to_string());
+    estimates.push(sigma);
+    parameter_names.push("linreg_R2".to_string());
+    estimates.push(r2);
+
+    let means = mean(&x, &wgt).estimates;
+    let x_centered = DMatrix::<f64>::from_columns(
+        &Vec::from_iter(x.column_iter().enumerate().map(|(i, c)| c.clone_owned() - DVector::<f64>::from_element(c.nrows(), means[i])))
+    );
+    let x_centered_weighted = DMatrix::<f64>::from_columns(
+        &Vec::from_iter(x_centered.column_iter().map(|c| c.component_mul(wgt)))
+    );
+    let covariance_matrix = x_centered.transpose() * x_centered_weighted;
+    let std_devs = DVector::<f64>::from_iterator(covariance_matrix.nrows(), covariance_matrix.diagonal().iter().map(|v| v.sqrt()));
+
+    let std_coeffs = if !intercept {
+        coeffs.component_mul(&std_devs.rows(1, x.ncols() - 1)) / std_devs[0]
+    } else if intercept && x.ncols() > 1 {
+        coeffs.rows(1, coeffs.nrows() - 1).component_mul(&std_devs.rows(1, x.ncols() - 1)) / std_devs[0]
+    } else {
+        DVector::<f64>::zeros(0)
+    };
+
+    for xx in 1..x.ncols() {
+        parameter_names.push(format!("linreg_beta_X{}", xx));
+    }
+    std_coeffs.iter().for_each(|v| estimates.push(*v));
+
+    Estimates {
+        parameter_names,
+        estimates: DVector::<f64>::from_vec(estimates),
+    }
+}
+
+pub fn linreg(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
+    linreg_with_options(x, wgt, true)
+}
+
 #[cfg(test)]
 mod tests {
-    use nalgebra::{dvector};
-    use rand::prelude::*;
-    use crate::{assert_approx_eq_iter_f64, assert_f64count_eq};
-    use crate::helper::ImmutableF64Count;
     use super::*;
+    use crate::helper::ImmutableF64Count;
+    use crate::{assert_approx_eq_iter_f64, assert_f64count_eq};
+    use nalgebra::dvector;
+    use rand::prelude::*;
 
     #[test]
     fn test_weighted_count_values() {
@@ -715,5 +805,121 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
 
         correlation(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "dimension mismatch of x and wgt in linreg")]
+    fn test_linreg_panic_dimension_mismatch() {
+        let data = DMatrix::from_row_slice(2, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        linreg(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "wgt contains NaN in linreg")]
+    fn test_linreg_panic_wgt_containing_nan() {
+        let data = DMatrix::from_row_slice(3, 3, &[
+            1.0, 4.0, 2.5,
+            2.5, 1.75, 4.0,
+            3.0, 3.0, 1.0,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, f64::NAN];
+
+        linreg(&data, &wgt);
+    }
+
+    #[test]
+    #[should_panic(expected = "linear regression missing a predictor")]
+    fn test_linreg_panic_no_predictor() {
+        let data = DMatrix::from_row_slice(3, 1, &[
+            1.0, 4.0, 2.5,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        linreg_with_options(&data, &wgt, false);
+    }
+
+    #[test]
+    fn test_linreg() {
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(543212345);
+
+        let mut data = DMatrix::<f64>::zeros(100,5);
+        data.set_column(0, &DVector::from_iterator(100, (0..100).into_iter().map(|_| rng.gen::<f64>())));
+
+        for cc in 1..5 {
+            let mut correlated_values = DVector::from(data.column(0));
+            correlated_values += DVector::from_iterator(100, (0..100).into_iter().map(|_| rng.gen::<f64>() * cc as f64));
+            data.set_column(cc, &correlated_values);
+        }
+
+        let mut writer_data = csv::Writer::from_path("./tests/_output/linreg_data.csv").unwrap();
+        for row in data.row_iter() {
+            writer_data.write_record(row.iter().map(|v| format!("{}", v))).unwrap();
+        }
+        writer_data.flush().unwrap();
+
+        let wgt = DVector::from_fn(100, |_,_| rng.gen_range(1..=10) as f64);
+
+        let mut writer_wgt = csv::Writer::from_path("./tests/_output/linreg_wgt.csv").unwrap();
+        for row in wgt.row_iter() {
+            writer_wgt.write_record(row.iter().map(|v| format!("{}", v))).unwrap();
+        }
+        writer_wgt.flush().unwrap();
+
+        let result = linreg(&data, &wgt);
+
+        assert_eq!(result.parameter_names, vec![
+            "linreg_b_intercept", "linreg_b_X1", "linreg_b_X2", "linreg_b_X3", "linreg_b_X4",
+            "linreg_sigma", "linreg_R2",
+            "linreg_beta_X1", "linreg_beta_X2", "linreg_beta_X3", "linreg_beta_X4",
+        ]);
+
+        assert_approx_eq_iter_f64!(result.estimates, vec![
+            -0.23666168, 0.40318749, 0.12941675, 0.06207778, -0.00264859,
+            0.18718991, 0.60802085,
+            0.54225732, 0.28499101, 0.19328278, -0.01025211,
+        ], 1e-8);
+
+        let result_without_intercept = linreg_with_options(&data, &wgt, false);
+
+        assert_eq!(result_without_intercept.parameter_names, vec![
+            "linreg_b_X1", "linreg_b_X2", "linreg_b_X3", "linreg_b_X4",
+            "linreg_sigma", "linreg_R2",
+            "linreg_beta_X1", "linreg_beta_X2", "linreg_beta_X3", "linreg_beta_X4",
+        ]);
+
+        assert_approx_eq_iter_f64!(result_without_intercept.estimates, vec![
+            0.35835451, 0.08677286, 0.03483418, -0.02913420,
+            0.19738016, 0.56340932,
+            0.48196029, 0.19108412, 0.10845825, -0.11277205,
+        ], 1e-8);
+    }
+
+    #[test]
+    fn test_linreg_just_intercept() {
+        let data = DMatrix::from_row_slice(3, 1, &[
+            1.0, 4.0, 2.5,
+        ]);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+
+        let result = linreg(&data, &wgt);
+
+        assert_eq!(result.parameter_names, vec![
+            "linreg_b_intercept",
+            "linreg_sigma", "linreg_R2",
+        ]);
+
+        assert_approx_eq_iter_f64!(result.estimates, vec![
+            2.25,
+            1.262438117, 0.0,
+        ], 1e-8);
     }
 }
