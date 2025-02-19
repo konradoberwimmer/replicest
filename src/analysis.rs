@@ -24,6 +24,7 @@ pub struct Analysis {
     groups: Option<Rc<Vec<DMatrix<f64>>>>,
     quantiles: Vec<f64>,
     quantile_type: estimates::QuantileType,
+    intercept: bool,
 }
 
 pub fn analysis() -> Analysis {
@@ -37,6 +38,7 @@ pub fn analysis() -> Analysis {
         groups: None,
         quantiles: vec![0.25, 0.50, 0.75],
         quantile_type: estimates::QuantileType::Interpolation,
+        intercept: true,
     }
 }
 
@@ -84,6 +86,18 @@ impl Analysis {
         self.estimate_name = Some("correlation".to_string());
         self.estimate = Some(Arc::new(estimates::correlation));
         self
+    }
+
+    pub fn linreg(&mut self) -> &mut Self {
+        self.estimate_name = Some("linreg".to_string());
+        let intercept = self.intercept.clone();
+        self.estimate = Some(Arc::new(move |x, wgt| estimates::linreg_with_options(x, wgt, intercept.clone())));
+        self
+    }
+
+    pub fn with_intercept(&mut self, intercept: bool) -> &mut Self {
+        self.intercept = intercept;
+        self.linreg()
     }
 
     pub fn quantiles(&mut self) -> &mut Self {
@@ -352,6 +366,7 @@ impl Analysis {
             groups: self.groups.clone(),
             quantiles: self.quantiles.clone(),
             quantile_type: self.quantile_type.clone(),
+            intercept: self.intercept,
         }
     }
 }

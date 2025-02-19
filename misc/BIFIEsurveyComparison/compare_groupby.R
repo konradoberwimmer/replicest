@@ -69,3 +69,7 @@ res$stat
 #upper
 res <- lsanalyzer_func_quantile(df_pirls_2021_aut_BO, vars = c("ASRREA", "ASBG11F"), breaks = c(0.1, 0.25, 0.5, 0.75, 0.9), useInterpolation = FALSE, mimicIdbAnalyzer = TRUE, group = "ITSEX")
 res$stat
+
+## linear regression ----
+res <- BIFIE.linreg(df_pirls_2021_aut_BO, formula = ASRREA ~ ASBG03 + ASBG04, group = "ITSEX")
+res$stat

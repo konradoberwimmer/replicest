@@ -294,3 +294,27 @@ fn test_analysis_quantiles_for_pirls_2021_aut() {
     assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].standard_errors(), vec![3.719583, 3.270532, 3.285723, 3.614068, 4.003227, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
     assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].standard_errors(), vec![4.930214, 3.329603, 3.304684, 2.236800, 4.061026, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
 }
+
+#[test]
+fn test_analysis_linreg_for_pirls_2021_aut() {
+    let (data, groups, wgt, repwgt) = fetch_pirls_2021_aut_dataset(&["ASRREA", "ASBG03", "ASBG04"], &["ITSEX"]);
+
+    let mut analysis = analysis();
+    analysis
+        .linreg()
+        .set_weights(&wgt)
+        .with_replicate_weights(&repwgt)
+        .set_variance_adjustment_factor(0.5);
+
+    analysis
+        .for_data(Imputation::Yes(&Vec::from_iter(data.iter())))
+        .group_by(Imputation::No(&groups[0]));
+
+    let result = analysis.calculate().unwrap();
+    assert_eq!(2, result.len());
+
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].final_estimates(), vec![513.6083649, -19.5452227, 18.6033596, 61.7012063, 0.2054813, -0.2646036, 0.3220570], 1e-7);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].final_estimates(), vec![524.2239772, -15.6323178, 8.7141860, 63.0247445, 0.1239988, -0.2793294, 0.1863096], 1e-7);
+    assert_approx_eq_iter_f64!(result[&vec!["1".to_string()]].standard_errors(), vec![7.86502341, 2.04233235, 2.19302481, 1.26126645, 0.02550668, 0.02654503, 0.03469780], 1e-7);
+    assert_approx_eq_iter_f64!(result[&vec!["2".to_string()]].standard_errors(), vec![6.39988059, 2.09004480, 1.47625935, 1.21296718, 0.02051664, 0.03405049, 0.02828366], 1e-7);
+}
