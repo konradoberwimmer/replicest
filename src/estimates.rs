@@ -91,6 +91,30 @@ pub fn missings(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
         estimates.push((sum_of_weights - missingweights) / sum_of_weights);
     }
 
+    let mut count_missings_listwise = 0;
+    let mut weights_missings_listwise = 0.0;
+
+    for (rr, row) in x.row_iter().enumerate() {
+        if row.iter().any(|e| e.is_nan()) {
+            count_missings_listwise += 1;
+            weights_missings_listwise += wgt[rr];
+        }
+    }
+
+    parameter_names.push("missingcases_listwise".to_string());
+    estimates.push(count_missings_listwise as f64);
+    parameter_names.push("missingweights_listwise".to_string());
+    estimates.push(weights_missings_listwise);
+    parameter_names.push("percmissing_listwise".to_string());
+    estimates.push(weights_missings_listwise / sum_of_weights);
+
+    parameter_names.push("validcases_listwise".to_string());
+    estimates.push((x.nrows() - count_missings_listwise) as f64);
+    parameter_names.push("validweights_listwise".to_string());
+    estimates.push(sum_of_weights - weights_missings_listwise);
+    parameter_names.push("percvalid_listwise".to_string());
+    estimates.push((sum_of_weights - weights_missings_listwise) / sum_of_weights);
+
     Estimates {
         parameter_names,
         estimates: DVector::from_vec(estimates),
@@ -505,7 +529,7 @@ mod tests {
             3.0, 3.0,
             f64::NAN, f64::NAN,
             f64::NAN, f64::NAN,
-            3.0, 3.0,
+            3.0, f64::NAN,
             f64::NAN, 4.0,
             2.0, 1.75,
             f64::NAN, 3.0,
@@ -515,12 +539,18 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0, 0.5, 1.5, 1.0];
 
         let result = missings(&data, &wgt);
-        assert_eq!(result.parameter_names.len(), 12);
+        assert_eq!(result.parameter_names.len(), 18);
         assert_eq!(result.parameter_names[0], "missingcases_x1");
         assert_eq!(result.parameter_names[5], "percvalid_x1");
         assert_eq!(result.parameter_names[6], "missingcases_x2");
         assert_eq!(result.parameter_names[11], "percvalid_x2");
-        assert_eq!(result.estimates, dvector![5.0, 4.5, 0.45, 5.0, 5.5, 0.55, 2.0, 1.5, 0.15, 8.0, 8.5, 0.85]);
+        assert_eq!(result.parameter_names[12], "missingcases_listwise");
+        assert_eq!(result.parameter_names[17], "percvalid_listwise");
+        assert_eq!(result.estimates, dvector![
+            5.0, 4.5, 0.45, 5.0, 5.5, 0.55,
+            3.0, 3.0, 0.30, 7.0, 7.0, 0.70,
+            6.0, 6.0, 0.60, 4.0, 4.0, 0.40,
+        ]);
     }
 
     #[test]
