@@ -1,3 +1,4 @@
+use std::fmt;
 use crate::helper::{ExtractValues, OrderedF64Counts};
 use nalgebra::{DMatrix, DVector};
 
@@ -96,11 +97,28 @@ pub fn missings(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum QuantileType {
     Lower,
     Interpolation,
     Upper,
+}
+
+impl fmt::Display for QuantileType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl From<String> for QuantileType {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "Lower" => QuantileType::Lower,
+            "Interpolation" => QuantileType::Interpolation,
+            "Upper" => QuantileType::Upper,
+            _ => QuantileType::Interpolation,
+        }
+    }
 }
 
 pub fn quantiles_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, quantiles: Vec<f64>, quantile_type: QuantileType) -> Estimates {

@@ -22,9 +22,7 @@ pub struct Analysis {
     estimate_name: Option<String>,
     estimate: Option<Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync>>,
     groups: Option<Rc<Vec<DMatrix<f64>>>>,
-    quantiles: Vec<f64>,
-    quantile_type: estimates::QuantileType,
-    intercept: bool,
+    options: HashMap<String, String>,
 }
 
 pub fn analysis() -> Analysis {
@@ -36,9 +34,7 @@ pub fn analysis() -> Analysis {
         estimate_name: None,
         estimate: None,
         groups: None,
-        quantiles: vec![0.25, 0.50, 0.75],
-        quantile_type: estimates::QuantileType::Interpolation,
-        intercept: true,
+        options: HashMap::new(),
     }
 }
 
@@ -90,31 +86,47 @@ impl Analysis {
 
     pub fn linreg(&mut self) -> &mut Self {
         self.estimate_name = Some("linreg".to_string());
-        let intercept = self.intercept.clone();
+        let intercept = if self.options.contains_key("intercept") {
+            if self.options["intercept"] == "true" {
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        };
         self.estimate = Some(Arc::new(move |x, wgt| estimates::linreg_with_options(x, wgt, intercept.clone())));
         self
     }
 
     pub fn with_intercept(&mut self, intercept: bool) -> &mut Self {
-        self.intercept = intercept;
+        self.options.insert("intercept".to_string(), intercept.to_string());
         self.linreg()
     }
 
     pub fn quantiles(&mut self) -> &mut Self {
         self.estimate_name = Some("quantiles".to_string());
-        let quantiles = self.quantiles.clone();
-        let quantile_type = self.quantile_type.clone();
+        let quantiles = if self.options.contains_key("quantiles") {
+            self.options["quantiles"].split(",").map(|v| v.parse().unwrap()).collect()
+        } else {
+            vec![0.25, 0.50, 0.75]
+        };
+        let quantile_type = if self.options.contains_key("quantile_type") {
+            self.options["quantile_type"].clone().into()
+        } else {
+            estimates::QuantileType::Interpolation
+        };
         self.estimate = Some(Arc::new(move |x, wgt| estimates::quantiles_with_options(x, wgt, quantiles.clone(), quantile_type.clone())));
         self
     }
 
     pub fn set_quantiles(&mut self, quantiles: Vec<f64>) -> &mut Self {
-        self.quantiles = quantiles;
+        self.options.insert("quantiles".to_string(), quantiles.iter().map(|v| v.to_string()).collect::<Vec<String>>().join(","));
         self.quantiles()
     }
 
     pub fn set_quantile_type(&mut self, quantile_type: estimates::QuantileType) -> &mut Self {
-        self.quantile_type = quantile_type;
+        self.options.insert("quantile_type".to_string(), quantile_type.to_string());
         self.quantiles()
     }
 
@@ -364,9 +376,7 @@ impl Analysis {
                 Some(estimate) => Some(Arc::clone(estimate)),
             },
             groups: self.groups.clone(),
-            quantiles: self.quantiles.clone(),
-            quantile_type: self.quantile_type.clone(),
-            intercept: self.intercept,
+            options: self.options.clone(),
         }
     }
 }
