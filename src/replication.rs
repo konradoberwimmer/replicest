@@ -33,6 +33,14 @@ impl ReplicatedEstimates {
     pub fn standard_errors(&self) -> &DVector<f64> {
         &self.standard_errors
     }
+
+    pub fn append(&mut self, other: ReplicatedEstimates) {
+        self.parameter_names.extend(other.parameter_names);
+        self.final_estimates.extend(other.final_estimates.iter().map(|v| v.clone()));
+        self.sampling_variances.extend(other.sampling_variances.iter().map(|v| v.clone()));
+        self.imputation_variances.extend(other.imputation_variances.iter().map(|v| v.clone()));
+        self.standard_errors.extend(other.standard_errors.iter().map(|v| v.clone()));
+    }
 }
 
 pub fn replicate_estimates(estimator: Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync>, x: &Vec<&DMatrix<f64>>, weights: &Vec<&DVector<f64>>, replicate_wgts: &Vec<&DMatrix<f64>>, factor: f64) -> ReplicatedEstimates {
@@ -127,8 +135,41 @@ fn calc_standard_errors_from_variances(sampling_variances: &DVector<f64>, imputa
 mod tests {
     use nalgebra::{dmatrix, dvector};
     use crate::assert_approx_eq_iter_f64;
-    use crate::estimates::mean;
+    use crate::estimates::{mean, missings};
     use super::*;
+
+    #[test]
+    fn test_replicated_estimates_append() {
+        let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
+        let data0 = DMatrix::from_row_slice(3, 4, &[
+            1.0, 4.0, 2.5, -1.0,
+            2.5, 1.75, 4.0, -2.5,
+            3.0, 3.0, 1.0, -3.5,
+        ]);
+        imp_data.push(&data0);
+
+        let wgt = dvector![1.0, 0.5, 1.5];
+        let rep_wgts = DMatrix::from_row_slice(3, 3, &[
+            0.0, 1.0, 1.0,
+            0.5, 0.0, 0.5,
+            1.5, 1.5, 0.0,
+        ]);
+
+        let mut result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
+        let counts = replicate_estimates(Arc::new(missings), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
+
+        result.append(counts);
+
+        assert_eq!(result.parameter_names.len(), 4 + 4 * 6 + 6);
+        assert_eq!(result.final_estimates, dvector![
+            2.25, 3.125, 2.0, -2.5,
+            0.0, 0.0, 0.0, 3.0, 3.0, 1.0,
+            0.0, 0.0, 0.0, 3.0, 3.0, 1.0,
+            0.0, 0.0, 0.0, 3.0, 3.0, 1.0,
+            0.0, 0.0, 0.0, 3.0, 3.0, 1.0,
+            0.0, 0.0, 0.0, 3.0, 3.0, 1.0,
+        ]);
+    }
 
     #[test]
     fn test_replicate_estimate_mean_no_imputation() {

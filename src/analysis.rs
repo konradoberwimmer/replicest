@@ -19,9 +19,10 @@ pub struct Analysis {
     wgt: Option<Rc<DVector<f64>>>,
     repwgts: Option<Rc<DMatrix<f64>>>,
     variance_adjustment_factor: f64,
+    groups: Option<Rc<Vec<DMatrix<f64>>>>,
+    with_counts: bool,
     estimate_name: Option<String>,
     estimate: Option<Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync>>,
-    groups: Option<Rc<Vec<DMatrix<f64>>>>,
     options: HashMap<String, String>,
 }
 
@@ -31,9 +32,10 @@ pub fn analysis() -> Analysis {
         wgt: None,
         repwgts: None,
         variance_adjustment_factor: 1.0,
+        groups: None,
+        with_counts: false,
         estimate_name: None,
         estimate: None,
-        groups: None,
         options: HashMap::new(),
     }
 }
@@ -81,6 +83,12 @@ impl Analysis {
     pub fn correlation(&mut self) -> &mut Self {
         self.estimate_name = Some("correlation".to_string());
         self.estimate = Some(Arc::new(estimates::correlation));
+        self
+    }
+
+    pub fn frequencies(&mut self) -> &mut Self {
+        self.estimate_name = Some("frequencies".to_string());
+        self.estimate = Some(Arc::new(estimates::frequencies));
         self
     }
 
@@ -145,6 +153,11 @@ impl Analysis {
         }
 
         self.groups = Some(Rc::new(new_vec));
+        self
+    }
+
+    pub fn with_counts(&mut self, counts: bool) -> &mut Self {
+        self.with_counts = counts;
         self
     }
 
@@ -309,13 +322,25 @@ impl Analysis {
         let mut results : HashMap<Vec<String>, ReplicatedEstimates> = HashMap::new();
 
         for key in keys {
-            let result = replicate_estimates(
+            let mut result = replicate_estimates(
                 self.estimate.as_ref().unwrap().clone(),
                 x_split.get(&key).unwrap(),
                 wgt_split.get(&key).unwrap(),
                 repwgt_split.get(&key).unwrap(),
                 self.variance_adjustment_factor,
             );
+
+            if self.with_counts {
+                let counts = replicate_estimates(
+                    Arc::new(estimates::missings),
+                    x_split.get(&key).unwrap(),
+                    wgt_split.get(&key).unwrap(),
+                    repwgt_split.get(&key).unwrap(),
+                    self.variance_adjustment_factor,
+                );
+
+                result.append(counts);
+            }
 
             results.insert(key, result);
         }
@@ -370,12 +395,13 @@ impl Analysis {
             wgt: self.wgt.clone(),
             repwgts: self.repwgts.clone(),
             variance_adjustment_factor: self.variance_adjustment_factor,
+            groups: self.groups.clone(),
+            with_counts: self.with_counts,
             estimate_name: self.estimate_name.clone(),
             estimate: match &self.estimate {
                 None => None,
                 Some(estimate) => Some(Arc::clone(estimate)),
             },
-            groups: self.groups.clone(),
             options: self.options.clone(),
         }
     }
@@ -522,6 +548,37 @@ mod tests {
         assert_eq!(3, result[&vec!["overall".to_string()]].final_estimates().len());
         assert_eq!(531.3, result[&vec!["overall".to_string()]].final_estimates()[2]);
         assert_eq!(0.0, result[&vec!["overall".to_string()]].standard_errors()[1]);
+    }
+
+    #[test]
+    fn test_calculate_works_with_counts() {
+        let data = dmatrix![
+            537.0, 456.2, 501.7;
+            499.1, f64::NAN, 502.9;
+            611.0, 501.9, 589.3;
+        ];
+
+        let mut analysis1 = analysis();
+        let result = analysis1.for_data(Imputation::No(&data)).mean().with_counts(true).calculate();
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        assert_eq!(1, result.len());
+        assert_eq!(3 + (3 + 1) * 6, result[&vec!["overall".to_string()]].final_estimates().len());
+        assert_eq!(531.3, result[&vec!["overall".to_string()]].final_estimates()[2]);
+        assert_eq!(0.0, result[&vec!["overall".to_string()]].standard_errors()[1]);
+
+        assert_approx_eq_iter_f64!(
+            result[&vec!["overall".to_string()]].final_estimates(),
+            vec![
+                549.03333333333, 479.05, 531.3,
+                0.0, 0.0, 0.0, 3.0, 3.0, 1.0,
+                1.0, 1.0, 1.0 / 3.0, 2.0, 2.0, 2.0 / 3.0,
+                0.0, 0.0, 0.0, 3.0, 3.0, 1.0,
+                1.0, 1.0, 1.0 / 3.0, 2.0, 2.0, 2.0 / 3.0,
+            ]
+        );
     }
 
     #[test]
