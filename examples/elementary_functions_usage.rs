@@ -30,7 +30,7 @@ fn main() {
         &vec![&data],
         &vec![&wgts],
         &vec![&replicate_weights],
-        1.0
+        0.5
     );
 
     println!("correlation {:?} with standard error of {:?}", result.final_estimates()[4], result.standard_errors()[4]);
