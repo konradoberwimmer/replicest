@@ -1,6 +1,7 @@
 namespace replicest {
         ReplicatedEstimates replicate_estimates(
                 Estimate estimate,
+                record<string, string> options,
                 [ByRef] sequence<sequence<sequence<double>>> x,
                 [ByRef] sequence<sequence<double>> wgt,
                 [ByRef] sequence<sequence<sequence<double>>> replicate_wgts,
@@ -9,8 +10,11 @@ namespace replicest {
 };
 
 enum Estimate {
+        "Frequencies",
+        "Quantiles",
         "Mean",
-        "Correlation"
+        "Correlation",
+        "LinearRegression"
 };
 
 dictionary ReplicatedEstimates {

@@ -1,11 +1,15 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use nalgebra::{DMatrix, DVector, Dyn, Matrix, U1};
 use serde::{Deserialize, Serialize};
 use crate::{estimates, replication};
 
 pub enum Estimate {
+    Frequencies,
+    Quantiles,
     Mean,
     Correlation,
+    LinearRegression,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -29,10 +33,36 @@ impl ReplicatedEstimates {
     }
 }
 
-pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec<Vec<f64>>, replicate_wgts: &Vec<Vec<Vec<f64>>>, factor: f64) -> ReplicatedEstimates {
-    let estimate_function = match estimate {
-        Estimate::Mean => { estimates::mean }
-        Estimate::Correlation => { estimates::correlation }
+pub fn replicate_estimates(estimate: Estimate, options: HashMap<String, String>, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec<Vec<f64>>, replicate_wgts: &Vec<Vec<Vec<f64>>>, factor: f64) -> ReplicatedEstimates {
+    let estimate_function : Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync> = match estimate {
+        Estimate::Frequencies => { Arc::new(estimates::frequencies) }
+        Estimate::Quantiles => {
+            let quantiles = if options.contains_key("quantiles") {
+                options["quantiles"].split(",").map(|v| v.parse().unwrap()).collect()
+            } else {
+                vec![0.25, 0.50, 0.75]
+            };
+            let quantile_type = if options.contains_key("quantile_type") {
+                options["quantile_type"].clone().into()
+            } else {
+                estimates::QuantileType::Interpolation
+            };
+            Arc::new(move |x, wgt| estimates::quantiles_with_options(x, wgt, quantiles.clone(), quantile_type.clone()))
+        }
+        Estimate::Mean => { Arc::new(estimates::mean) }
+        Estimate::Correlation => { Arc::new(estimates::correlation) }
+        Estimate::LinearRegression => {
+            let intercept = if options.contains_key("intercept") {
+                if options["intercept"] == "true" {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                true
+            };
+            Arc::new(move |x, wgt| estimates::linreg_with_options(x, wgt, intercept))
+        }
     };
 
     let mut data : Vec<DMatrix<f64>> = Vec::new();
@@ -64,7 +94,7 @@ pub fn replicate_estimates(estimate: Estimate, x: &Vec<Vec<Vec<f64>>>, wgt: &Vec
     let ref_replicate_weights : Vec<&DMatrix<f64>> = Vec::from_iter(replicate_weights.iter());
 
     let result = replication::replicate_estimates(
-        Arc::new(estimate_function),
+        estimate_function,
         &ref_data,
         &ref_weights,
         &ref_replicate_weights,
@@ -106,7 +136,7 @@ mod tests {
             vec![1.5, 1.5, 0.0],
         ];
 
-        let result = replicate_estimates(Estimate::Mean, &imp_data, &vec![wgt], &vec![rep_wgts], 1.0);
+        let result = replicate_estimates(Estimate::Mean, HashMap::new(), &imp_data, &vec![wgt], &vec![rep_wgts], 1.0);
         assert_eq!(4, result.parameter_names.len());
         assert_eq!("mean_x2", result.parameter_names[1]);
 
@@ -117,6 +147,38 @@ mod tests {
 
         assert_approx_eq_iter_f64!(result.final_estimates, expected_final_estimates);
         assert_approx_eq_iter_f64!(result.sampling_variances, expected_sampling_variances);
+        assert_approx_eq_iter_f64!(result.imputation_variances, expected_imputation_variances);
+        assert_approx_eq_iter_f64!(result.standard_errors, expected_standard_errors);
+    }
+
+    #[test]
+    fn test_replicate_estimates_with_options() {
+        let data = vec![
+            vec![
+                vec![1.0, 4.0],
+                vec![2.5, 1.75],
+                vec![3.0, 3.0],
+            ]
+        ];
+
+        let wgt = vec![1.0, 0.5, 1.5];
+        let rep_wgts = vec![
+            vec![0.0, 1.0, 1.0],
+            vec![0.5, 0.0, 0.5],
+            vec![1.5, 1.5, 0.0],
+        ];
+
+        let options = HashMap::from([("intercept".to_string(), "false".to_string())]);
+
+        let result = replicate_estimates(Estimate::LinearRegression, options, &data, &vec![wgt], &vec![rep_wgts], 1.0);
+        assert_eq!(4, result.parameter_names.len());
+        assert_eq!(vec!["linreg_b_X1", "linreg_sigma", "linreg_R2", "linreg_beta_X1"], result.parameter_names);
+
+        let expected_final_estimates = vec![0.6344410876132931, 1.6022548311072888, -1.1064373692772485, 0.53516843619415233];
+        let expected_imputation_variances = vec![0.0, 0.0, 0.0, 0.0];
+        let expected_standard_errors = vec![0.4983981196204999, 1.1609336342898504, 0.85450312343302826, 2.0876620405907396];
+
+        assert_approx_eq_iter_f64!(result.final_estimates, expected_final_estimates);
         assert_approx_eq_iter_f64!(result.imputation_variances, expected_imputation_variances);
         assert_approx_eq_iter_f64!(result.standard_errors, expected_standard_errors);
     }
