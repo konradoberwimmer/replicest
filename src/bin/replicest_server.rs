@@ -1,16 +1,33 @@
+use clap::{CommandFactory, FromArgMatches, Parser};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::remove_file;
 use std::io::Read;
 use std::os::unix::net::{UnixDatagram, UnixListener};
+use std::path::PathBuf;
 use nalgebra::{DMatrix, DVector};
 use users::get_current_uid;
 use replicest::analysis::*;
 use replicest::errors::DataLengthError;
 use replicest::ReplicatedEstimates;
 
+/// Replicest server
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct CliArguments {
+    /// Path for the UDS server socket (optional, defaults vary by OS)
+    #[arg(long, short)]
+    server_socket: Option<PathBuf>,
+
+    /// Path for the UDS data socket  (optional, defaults vary by OS)
+    #[arg(long, short)]
+    data_socket: Option<PathBuf>,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let (message_socket, data_socket) = setup_sockets()?;
+    let cli_args = CliArguments::from_arg_matches(&mut CliArguments::command().ignore_errors(true).get_matches())?;
+
+    let (message_socket, data_socket) = setup_sockets(cli_args.server_socket, cli_args.data_socket)?;
 
     let mut current_analysis = analysis();
 
@@ -51,14 +68,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn setup_sockets() -> Result<(UnixDatagram, UnixListener), Box<dyn Error>> {
+fn setup_sockets(server_socket_addr: Option<PathBuf>, data_socket_addr: Option<PathBuf>) -> Result<(UnixDatagram, UnixListener), Box<dyn Error>> {
     let user_id = get_current_uid();
 
-    let message_socket_addr = format!("/run/user/{}/replicest_server", user_id);
+    let message_socket_addr = match server_socket_addr {
+        Some(server_socket_addr) => server_socket_addr,
+        None => format!("/run/user/{}/replicest_server", user_id).parse().unwrap()
+    };
     let _ = remove_file(&message_socket_addr);
     let message_socket = UnixDatagram::bind(&message_socket_addr)?;
 
-    let data_socket_addr = format!("/run/user/{}/replicest_server_data", user_id);
+    let data_socket_addr = match data_socket_addr {
+        Some(data_socket_addr) => data_socket_addr,
+        None => format!("/run/user/{}/replicest_server_data", user_id).parse().unwrap()
+    };
     let _ = remove_file(&data_socket_addr);
     let data_socket = UnixListener::bind(&data_socket_addr)?;
 
@@ -259,14 +282,24 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_setup_sockets() {
+    fn test_setup_default_sockets() {
         let user_id = get_current_uid();
 
-        assert!(setup_sockets().is_ok());
+        assert!(setup_sockets(None, None).is_ok());
         assert!(exists(format!("/run/user/{}/replicest_server", user_id)).unwrap_or(false));
         assert!(exists(format!("/run/user/{}/replicest_server_data", user_id)).unwrap_or(false));
 
-        assert!(setup_sockets().is_ok());
+        assert!(setup_sockets(None, None).is_ok());
+    }
+
+    #[test]
+    #[serial]
+    fn test_setup_custom_sockets() {
+        let user_id = get_current_uid();
+
+        assert!(setup_sockets(Some(format!("/run/user/{}/replicest_server_test", user_id).parse().unwrap()), Some(format!("/run/user/{}/replicest_server_data_test", user_id).parse().unwrap())).is_ok());
+        assert!(exists(format!("/run/user/{}/replicest_server_test", user_id)).unwrap_or(false));
+        assert!(exists(format!("/run/user/{}/replicest_server_data_test", user_id)).unwrap_or(false));
     }
 
     #[test]
