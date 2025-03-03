@@ -96,97 +96,43 @@ fn trim_buffer(buffer: &[u8]) -> String {
 
 fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     match message.as_str() {
-        str if str.starts_with("data") => {
-            let message_arguments = parse_data_message(&str);
-
-            match message_arguments {
-                None => {
-                    Ok(vec!(b"bad request - usage: data <number_imputations> <number_columns>".into()))
-                }
-                Some((number_imputations, number_columns)) => {
-                    let mut data : Vec<DMatrix<f64>> = Vec::new();
-
-                    for _ in 0..number_imputations {
-                        data.push(listen_for_data(data_socket, number_columns)?);
-                    }
-
-                    match number_imputations {
-                        1 => {
-                            analysis.for_data(Imputation::No(&data[0]));
-                        }
-                        _ => {
-                            let imp_data : Vec<&DMatrix<f64>> = Vec::from_iter(data.iter().map(|v| v));
-                            analysis.for_data(Imputation::Yes(&imp_data));
-                        }
-                    }
-
-                    Ok(vec!(b"received data".into()))
-                }
-            }
-        }
-        "weights" => {
-            let data = listen_for_data(data_socket, 1)?;
-            let weight_vector : DVector<f64> = DVector::<f64>::from_iterator(data.nrows(), data.iter().map(|v| v.clone()));
-            analysis.set_weights(&weight_vector);
-            Ok(vec!(b"received weights".into()))
-        }
-        str if str.starts_with("replicate weights") => {
-            let message_arguments = parse_replicate_weights_message(&str);
-
-            match message_arguments {
-                None => {
-                    Ok(vec!(b"bad request - usage: replicate weights <number_columns>".into()))
-                }
-                Some(number_columns) => {
-                    let replicate_weights = listen_for_data(data_socket, number_columns)?;
-                    analysis.with_replicate_weights(&replicate_weights);
-                    Ok(vec!(b"received replicate weights".into()))
-                }
-            }
-        }
-        str if str.starts_with("set variance adjustment factor") => {
-            let message_arguments = parse_set_variance_adjustment_factor_message(&str);
-
-            match message_arguments {
-                None => {
-                    Ok(vec!(b"bad request - usage: set variance adjustment factor <factor>".into()))
-                }
-                Some(factor) => {
-                    analysis.set_variance_adjustment_factor(factor);
-                    Ok(vec!(b"set variance adjustment factor".into()))
-                }
-            }
-        }
-        "mean" => {
-            analysis.mean();
-            Ok(vec!(b"set analysis to mean".into()))
-        }
-        "calculate" => {
-            let result = analysis.calculate();
-            match result {
-                Ok(result_data) => {
-                    let mut result_data_external : HashMap<Vec<String>, ReplicatedEstimates> = HashMap::new();
-                    for (key, value) in result_data.iter() {
-                        result_data_external.insert(key.clone(), ReplicatedEstimates::from_internal(value));
-                    }
-                    let serialization = rmp_serde::to_vec(&result_data_external);
-
-                    match serialization {
-                        Ok(serialized_data) => {
-                            Ok(vec!(b"calculation complete".try_into().unwrap(), serialized_data))
-                        }
-                        Err(err) => {
-                            Ok(vec!([b"error serializing calculation result: ", err.to_string().as_bytes()].concat().into()))
-                        }
-                    }
-                }
-                Err(err) => {
-                    Ok(vec!([b"error calculating: ", err.to_string().as_bytes()].concat().into()))
-                }
-            }
-        }
+        str if str.starts_with("data") => handle_data_message(str, analysis, data_socket),
+        "weights" => handle_weights_message(analysis, data_socket),
+        str if str.starts_with("replicate weights") => handle_replicate_weights_message(str, analysis, data_socket),
+        str if str.starts_with("set variance adjustment factor") => handle_set_variance_adjustment_factor_message(str, analysis),
+        str @ ("frequencies" | "quantiles"  | "mean" | "correlation" | "linear regression") => handle_estimate_message(str, analysis),
+        "calculate" => handle_calculate_message(analysis),
         _ => {
             Ok(vec!(b"unknown".into()))
+        }
+    }
+}
+
+fn handle_data_message(message: &str, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let message_arguments = parse_data_message(&message);
+
+    match message_arguments {
+        None => {
+            Ok(vec!(b"bad request - usage: data <number_imputations> <number_columns>".into()))
+        }
+        Some((number_imputations, number_columns)) => {
+            let mut data : Vec<DMatrix<f64>> = Vec::new();
+
+            for _ in 0..number_imputations {
+                data.push(listen_for_data(data_socket, number_columns)?);
+            }
+
+            match number_imputations {
+                1 => {
+                    analysis.for_data(Imputation::No(&data[0]));
+                }
+                _ => {
+                    let imp_data : Vec<&DMatrix<f64>> = Vec::from_iter(data.iter().map(|v| v));
+                    analysis.for_data(Imputation::Yes(&imp_data));
+                }
+            }
+
+            Ok(vec!(b"received data".into()))
         }
     }
 }
@@ -204,6 +150,28 @@ fn parse_data_message(message: &str) -> Option<(usize, usize)> {
     }
 }
 
+fn handle_weights_message(analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let data = listen_for_data(data_socket, 1)?;
+    let weight_vector : DVector<f64> = DVector::<f64>::from_iterator(data.nrows(), data.iter().map(|v| v.clone()));
+    analysis.set_weights(&weight_vector);
+    Ok(vec!(b"received weights".into()))
+}
+
+fn handle_replicate_weights_message(message: &str, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let message_arguments = parse_replicate_weights_message(&message);
+
+    match message_arguments {
+        None => {
+            Ok(vec!(b"bad request - usage: replicate weights <number_columns>".into()))
+        }
+        Some(number_columns) => {
+            let replicate_weights = listen_for_data(data_socket, number_columns)?;
+            analysis.with_replicate_weights(&replicate_weights);
+            Ok(vec!(b"received replicate weights".into()))
+        }
+    }
+}
+
 fn parse_replicate_weights_message(message: &str) -> Option<usize> {
     let message_components : Vec<&str> = message.split(" ").collect();
 
@@ -217,6 +185,20 @@ fn parse_replicate_weights_message(message: &str) -> Option<usize> {
     }
 }
 
+fn handle_set_variance_adjustment_factor_message(message: &str, analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let message_arguments = parse_set_variance_adjustment_factor_message(&message);
+
+    match message_arguments {
+        None => {
+            Ok(vec!(b"bad request - usage: set variance adjustment factor <factor>".into()))
+        }
+        Some(factor) => {
+            analysis.set_variance_adjustment_factor(factor);
+            Ok(vec!(b"set variance adjustment factor".into()))
+        }
+    }
+}
+
 fn parse_set_variance_adjustment_factor_message(message: &str) -> Option<f64> {
     let message_components : Vec<&str> = message.split(" ").collect();
 
@@ -226,6 +208,45 @@ fn parse_set_variance_adjustment_factor_message(message: &str) -> Option<f64> {
         }
         _ => {
             None
+        }
+    }
+}
+
+fn handle_estimate_message(estimate: &str, analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    match estimate {
+        "frequencies" => { analysis.frequencies(); }
+        "quantiles" => { analysis.quantiles(); }
+        "mean" => { analysis.mean(); }
+        "correlation" => { analysis.correlation(); }
+        "linear regression" => { analysis.linreg(); }
+        _ => { }
+    }
+    let mut return_message : Vec<u8> = b"set analysis to ".into();
+    return_message.append(estimate.to_string().into_bytes().as_mut());
+    Ok(vec!(return_message))
+}
+
+fn handle_calculate_message(analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let result = analysis.calculate();
+    match result {
+        Ok(result_data) => {
+            let mut result_data_external : HashMap<Vec<String>, ReplicatedEstimates> = HashMap::new();
+            for (key, value) in result_data.iter() {
+                result_data_external.insert(key.clone(), ReplicatedEstimates::from_internal(value));
+            }
+            let serialization = rmp_serde::to_vec(&result_data_external);
+
+            match serialization {
+                Ok(serialized_data) => {
+                    Ok(vec!(b"calculation complete".try_into().unwrap(), serialized_data))
+                }
+                Err(err) => {
+                    Ok(vec!([b"error serializing calculation result: ", err.to_string().as_bytes()].concat().into()))
+                }
+            }
+        }
+        Err(err) => {
+            Ok(vec!([b"error calculating: ", err.to_string().as_bytes()].concat().into()))
         }
     }
 }
@@ -647,6 +668,27 @@ mod tests {
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"set variance adjustment factor"), return_value.unwrap()[0]);
         assert_eq!("none (no data; wgt missing; 3 replicate weights, factor 0.5)", current_analysis.summary());
+    }
+
+    #[test]
+    fn test_handle_message_estimate() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_message_sestimate".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let mut current_analysis = analysis();
+
+        let return_value = handle_message("mean".to_string(), &mut current_analysis, &data_socket);
+
+        assert!(return_value.is_ok());
+        assert_eq!(Vec::from(b"set analysis to mean"), return_value.unwrap()[0]);
+        assert_eq!("mean (no data; wgt missing; no replicate weights)", current_analysis.summary());
+
+        let return_value = handle_message("linear regression".to_string(), &mut current_analysis, &data_socket);
+
+        assert!(return_value.is_ok());
+        assert_eq!(Vec::from(b"set analysis to linear regression"), return_value.unwrap()[0]);
+        assert_eq!("linreg (no data; wgt missing; no replicate weights)", current_analysis.summary());
     }
 
     #[test]
