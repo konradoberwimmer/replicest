@@ -9,6 +9,7 @@ use nalgebra::{DMatrix, DVector};
 use users::get_current_uid;
 use replicest::analysis::*;
 use replicest::errors::DataLengthError;
+use replicest::estimates::QuantileType;
 use replicest::ReplicatedEstimates;
 
 /// Replicest server
@@ -102,6 +103,9 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
         str if str.starts_with("set variance adjustment factor") => handle_set_variance_adjustment_factor_message(str, analysis),
         str if str.starts_with("groups") => handle_input_message(InputMessageMode::Groups, str, analysis, data_socket),
         str @ ("frequencies" | "quantiles"  | "mean" | "correlation" | "linear regression") => handle_estimate_message(str, analysis),
+        str if str.starts_with("set quantiles") => handle_set_quantiles_message(str, analysis),
+        str if str.starts_with("quantile type") => handle_quantile_type_message(str, analysis),
+        str if str.starts_with("with intercept") => handle_with_intercept_message(str, analysis),
         "calculate" => handle_calculate_message(analysis),
         _ => {
             Ok(vec!(b"unknown".into()))
@@ -245,6 +249,95 @@ fn handle_estimate_message(estimate: &str, analysis: &mut Analysis) -> Result<Ve
     let mut return_message : Vec<u8> = b"set analysis to ".into();
     return_message.append(estimate.to_string().into_bytes().as_mut());
     Ok(vec!(return_message))
+}
+
+fn handle_set_quantiles_message(message: &str, analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let parsed_message = parse_set_quantiles_message(&message);
+
+    match parsed_message {
+        None => {
+            Ok(vec!(b"bad request - usage: set quantiles <quantile1> <quantile2> ...".into()))
+        }
+        Some(quantiles) => {
+            analysis.set_quantiles(quantiles);
+            Ok(vec!(b"set quantiles as requested".into()))
+        }
+    }
+}
+
+fn parse_set_quantiles_message(message: &str) -> Option<Vec<f64>> {
+    let message_components : Vec<&str> = message.split(" ").collect();
+
+    if message_components.len() < 3 {
+        None
+    } else {
+        let mut quantiles : Vec<f64> = Vec::new();
+
+        for quantile in message_components[2..].iter() {
+            let parsed_quantile = quantile.parse::<f64>();
+            match parsed_quantile {
+                Ok(quantile) => { quantiles.push(quantile); }
+                Err(_) => { return None; }
+            }
+        }
+
+        Some(quantiles)
+    }
+}
+
+fn handle_quantile_type_message(message: &str, analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let quantile_type = parse_quantile_type_message(message);
+
+    match quantile_type {
+        None => {
+            Ok(vec!(b"bad request - usage: quantile type <lower|interpolation|upper>".into()))
+        }
+        Some(quantile_type) => {
+            analysis.set_quantile_type(quantile_type.clone());
+
+            let mut return_message : Vec<u8> = b"quantile type set to ".into();
+            return_message.append(quantile_type.to_string().to_lowercase().into_bytes().as_mut());
+            Ok(vec!(return_message))
+        }
+    }
+}
+
+fn parse_quantile_type_message(message: &str) -> Option<QuantileType> {
+    let message_components : Vec<&str> = message.split(" ").collect();
+
+    match message_components.as_slice() {
+        [_, _, "lower"] => Some(QuantileType::Lower),
+        [_, _, "interpolation"] => Some(QuantileType::Interpolation),
+        [_, _, "upper"] => Some(QuantileType::Upper),
+        _ => None
+    }
+}
+
+fn handle_with_intercept_message(message: &str, analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let intercept = parse_with_intercept_message(&message);
+
+    match intercept {
+        None => {
+            Ok(vec!(b"bad request - usage: with intercept <true|false>".into()))
+        }
+        Some(intercept) => {
+            analysis.with_intercept(intercept);
+
+            let mut return_message : Vec<u8> = b"with intercept set to ".into();
+            return_message.append(intercept.to_string().to_lowercase().into_bytes().as_mut());
+            Ok(vec!(return_message))
+        }
+    }
+}
+
+fn parse_with_intercept_message(message: &str) -> Option<bool> {
+    let message_components : Vec<&str> = message.split(" ").collect();
+
+    match message_components.as_slice() {
+        [_, _, "true"] => Some(true),
+        [_, _, "false"] => Some(false),
+        _ => None
+    }
 }
 
 fn handle_calculate_message(analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
@@ -710,6 +803,96 @@ mod tests {
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"set analysis to linear regression"), return_value.unwrap()[0]);
         assert_eq!("linreg (no data; wgt missing; no replicate weights)", current_analysis.summary());
+    }
+
+    #[test]
+    fn test_handle_set_quantiles_message() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_set_quantiles_message".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let mut current_analysis = analysis();
+
+        let return_value = handle_message("set quantiles 0.10 0.25 0.50 0.75 0.90".to_string(), &mut current_analysis, &data_socket);
+
+        assert!(return_value.is_ok());
+        assert_eq!(Vec::from(b"set quantiles as requested"), return_value.unwrap()[0]);
+        assert_eq!("quantiles (no data; wgt missing; no replicate weights)", current_analysis.summary());
+    }
+
+    #[test]
+    fn test_parse_set_quantiles_message() {
+        let too_short_message = "set quantiles";
+        assert!(parse_set_quantiles_message(too_short_message).is_none());
+
+        let no_f64_message = "set quantiles 0.5 a";
+        assert!(parse_set_quantiles_message(no_f64_message).is_none());
+
+        let correct_message = "set quantiles 0.10 0.25 0.50 0.75 0.90";
+        let result = parse_set_quantiles_message(correct_message);
+        assert!(result.is_some());
+        let quantiles = result.unwrap();
+        assert_eq!(quantiles.len(), 5);
+    }
+
+    #[test]
+    fn test_handle_quantile_type_message() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_quantile_type_message".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let mut current_analysis = analysis();
+
+        let return_value = handle_message("quantile type upper".to_string(), &mut current_analysis, &data_socket);
+
+        assert!(return_value.is_ok());
+        assert_eq!(Vec::from(b"quantile type set to upper"), return_value.unwrap()[0]);
+        assert_eq!("quantiles (no data; wgt missing; no replicate weights)", current_analysis.summary());
+    }
+
+    #[test]
+    fn test_parse_quantile_type_message() {
+        let too_short_message = "quantile type";
+        assert!(parse_quantile_type_message(too_short_message).is_none());
+
+        let wrong_quantile_type_message = "quantile type dumb";
+        assert!(parse_quantile_type_message(wrong_quantile_type_message).is_none());
+
+        let correct_quantile_type_message = "quantile typer interpolation";
+        let result = parse_quantile_type_message(correct_quantile_type_message);
+        assert!(result.is_some());
+        let quantile_type = result.unwrap();
+        assert_eq!(quantile_type, QuantileType::Interpolation);
+    }
+
+    #[test]
+    fn test_handle_with_intercept_message() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_with_intercept_message".to_string();
+        let _ = remove_file(&data_socket_addr);
+        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+
+        let mut current_analysis = analysis();
+
+        let return_value = handle_message("with intercept true".to_string(), &mut current_analysis, &data_socket);
+
+        assert!(return_value.is_ok());
+        assert_eq!(Vec::from(b"with intercept set to true"), return_value.unwrap()[0]);
+        assert_eq!("linreg (no data; wgt missing; no replicate weights)", current_analysis.summary());
+    }
+
+    #[test]
+    fn test_parse_with_intercept_message() {
+        let too_short_message = "with intercept";
+        assert!(parse_with_intercept_message(too_short_message).is_none());
+
+        let not_boolean_message = "with intercept dumb";
+        assert!(parse_with_intercept_message(not_boolean_message).is_none());
+
+        let correct_with_intercept_message = "with intercept false";
+        let result = parse_with_intercept_message(correct_with_intercept_message);
+        assert!(result.is_some());
+        let with_intercept = result.unwrap();
+        assert_eq!(with_intercept, false);
     }
 
     #[test]

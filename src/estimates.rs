@@ -121,7 +121,7 @@ pub fn missings(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum QuantileType {
     Lower,
     Interpolation,
