@@ -96,10 +96,11 @@ fn trim_buffer(buffer: &[u8]) -> String {
 
 fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     match message.as_str() {
-        str if str.starts_with("data") => handle_data_message(str, analysis, data_socket),
+        str if str.starts_with("data") => handle_input_message(InputMessageMode::Data, str, analysis, data_socket),
         "weights" => handle_weights_message(analysis, data_socket),
         str if str.starts_with("replicate weights") => handle_replicate_weights_message(str, analysis, data_socket),
         str if str.starts_with("set variance adjustment factor") => handle_set_variance_adjustment_factor_message(str, analysis),
+        str if str.starts_with("groups") => handle_input_message(InputMessageMode::Groups, str, analysis, data_socket),
         str @ ("frequencies" | "quantiles"  | "mean" | "correlation" | "linear regression") => handle_estimate_message(str, analysis),
         "calculate" => handle_calculate_message(analysis),
         _ => {
@@ -108,36 +109,56 @@ fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixLi
     }
 }
 
-fn handle_data_message(message: &str, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
-    let message_arguments = parse_data_message(&message);
+enum InputMessageMode {
+    Data,
+    Groups
+}
+
+fn handle_input_message(mode: InputMessageMode, message: &str, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let message_arguments = parse_input_message(&message);
 
     match message_arguments {
         None => {
-            Ok(vec!(b"bad request - usage: data <number_imputations> <number_columns>".into()))
+            match mode {
+                InputMessageMode::Data => {
+                    Ok(vec!(b"bad request - usage: data <number_imputations> <number_columns>".into()))
+                }
+                InputMessageMode::Groups => {
+                    Ok(vec!(b"bad request - usage: groups <number_imputations> <number_columns>".into()))
+                }
+            }
         }
         Some((number_imputations, number_columns)) => {
-            let mut data : Vec<DMatrix<f64>> = Vec::new();
+            let mut input: Vec<DMatrix<f64>> = Vec::new();
 
             for _ in 0..number_imputations {
-                data.push(listen_for_data(data_socket, number_columns)?);
+                input.push(listen_for_data(data_socket, number_columns)?);
             }
 
-            match number_imputations {
-                1 => {
-                    analysis.for_data(Imputation::No(&data[0]));
-                }
+            let imp_data : Vec<&DMatrix<f64>>;
+            let input = match number_imputations {
+                1 => Imputation::No(&input[0]),
                 _ => {
-                    let imp_data : Vec<&DMatrix<f64>> = Vec::from_iter(data.iter().map(|v| v));
-                    analysis.for_data(Imputation::Yes(&imp_data));
+                    imp_data = Vec::from_iter(input.iter().map(|v| v));
+                    Imputation::Yes(&imp_data)
+                }
+            };
+
+            match mode {
+                InputMessageMode::Data => {
+                    analysis.for_data(input);
+                    Ok(vec!(b"received data".into()))
+                }
+                InputMessageMode::Groups => {
+                    analysis.group_by(input);
+                    Ok(vec!(b"received groups".into()))
                 }
             }
-
-            Ok(vec!(b"received data".into()))
         }
     }
 }
 
-fn parse_data_message(message: &str) -> Option<(usize, usize)> {
+fn parse_input_message(message: &str) -> Option<(usize, usize)> {
     let message_components : Vec<&str> = message.split(" ").collect();
 
     match message_components.as_slice() {
@@ -493,13 +514,13 @@ mod tests {
     #[test]
     fn test_parse_data_message() {
         let wrong_message = "data";
-        assert!(parse_data_message(wrong_message).is_none());
+        assert!(parse_input_message(wrong_message).is_none());
 
         let wrong_message = "data a 1";
-        assert!(parse_data_message(wrong_message).is_none());
+        assert!(parse_input_message(wrong_message).is_none());
 
         let message = "data 5 15";
-        let result = parse_data_message(message);
+        let result = parse_input_message(message);
 
         assert!(result.is_some());
         assert_eq!((5, 15), result.unwrap());
@@ -564,23 +585,23 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_message_data_with_imputation() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_data_with_imputation".to_string();
+    fn test_handle_message_groups_with_imputation() {
+        let data_socket_addr = "/tmp/replicest_server_test_handle_message_groups_with_imputation".to_string();
         let _ = remove_file(&data_socket_addr);
         let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
 
         let handle = thread::spawn(move || {
             let mut current_analysis = analysis();
-            let return_value = handle_message("data 2 3".to_string(), &mut current_analysis, &data_socket);
+            let return_value = handle_message("groups 2 3".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
-            assert_eq!(Vec::from(b"received data"), return_value.unwrap()[0]);
-            assert_eq!("none (2 datasets with 2 cases; wgt missing; no replicate weights)", current_analysis.summary());
+            assert_eq!(Vec::from(b"received groups"), return_value.unwrap()[0]);
+            assert_eq!("none by 3 grouping columns (no data; wgt missing; no replicate weights)", current_analysis.summary());
         });
 
         thread::sleep(Duration::from_millis(200));
 
         for _ in 0..2 {
-            let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_data_with_imputation").unwrap();
+            let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_groups_with_imputation").unwrap();
 
             let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
             let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
