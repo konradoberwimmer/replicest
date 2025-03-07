@@ -374,7 +374,7 @@ fn listen_for_data(data_socket: &UnixListener, columns: usize) -> Result<DMatrix
             let data = u8_to_f64_vec(buffer, columns)?;
             let rows = data.len() / columns;
 
-            Ok(DMatrix::from_vec(rows, columns, data))
+            Ok(DMatrix::from_row_slice(rows, columns, data.as_slice()))
         }
         Err(err) => {
             Err(Box::new(err))
@@ -526,9 +526,9 @@ mod tests {
             assert!(return_value.is_ok());
 
             let expected = dmatrix![
-                1.5, 14.44;
-                2.0, -7.1;
-                -3.2, f64::NAN;
+                1.5, 2.0;
+                -3.2, 14.44;
+                -7.1, f64::NAN;
             ];
 
             let result = return_value.unwrap();
