@@ -439,18 +439,23 @@ fn u8_to_f64_vec(u8_data: Vec<u8>, columns: usize) -> Result<Vec<f64>, Box<dyn E
 
 #[cfg(test)]
 mod tests {
+    use std::env::temp_dir;
     use serial_test::serial;
     use std::fs::exists;
     use std::io::Write;
     use std::ops::Deref;
+    #[cfg(unix)]
     use std::os::unix::net::UnixStream;
     use super::*;
     use std::thread;
     use std::time::Duration;
+    #[cfg(windows)]
+    use directories::BaseDirs;
     use nalgebra::{dmatrix, dvector};
 
     #[test]
     #[serial]
+    #[cfg(target_os = "linux")]
     fn test_setup_default_sockets() {
         let user_id = get_current_uid();
 
@@ -463,18 +468,40 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_setup_custom_sockets() {
-        let user_id = get_current_uid();
+    #[cfg(target_os = "macos")]
+    fn test_setup_default_sockets() {
+        assert!(setup_sockets(None, None).is_ok());
+        assert!(exists("/tmp/replicest_server").unwrap_or(false));
+        assert!(exists("/tmp/replicest_server_data").unwrap_or(false));
 
-        assert!(setup_sockets(Some(format!("/run/user/{}/replicest_server_test", user_id).parse().unwrap()), Some(format!("/run/user/{}/replicest_server_data_test", user_id).parse().unwrap())).is_ok());
-        assert!(exists(format!("/run/user/{}/replicest_server_test", user_id)).unwrap_or(false));
-        assert!(exists(format!("/run/user/{}/replicest_server_data_test", user_id)).unwrap_or(false));
+        assert!(setup_sockets(None, None).is_ok());
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(target_os = "windows")]
+    fn test_setup_default_sockets() {
+        let base_dirs = BaseDirs::new().expect("could not get base directories");
+
+        assert!(setup_sockets(None, None).is_ok());
+        assert!(exists(format!("{}/replicest_server", base_dirs.data_local_dir().to_str())).unwrap_or(false));
+        assert!(exists(format!("{}/replicest_server_data", base_dirs.data_local_dir().to_str())).unwrap_or(false));
+
+        assert!(setup_sockets(None, None).is_ok());
+    }
+
+    #[test]
+    #[serial]
+    fn test_setup_custom_sockets() {
+        assert!(setup_sockets(Some(format!("{}/replicest_server_test", temp_dir().to_str().unwrap()).parse().unwrap()), Some(format!("{}/replicest_server_data_test", temp_dir().to_str().unwrap()).parse().unwrap())).is_ok());
+        assert!(exists(format!("{}/replicest_server_test", temp_dir().to_str().unwrap())).unwrap_or(false));
+        assert!(exists(format!("{}/replicest_server_data_test", temp_dir().to_str().unwrap())).unwrap_or(false));
     }
 
     #[test]
     #[serial]
     fn test_message_socket_general_commands() {
-        let client_addr = "/tmp/replicest_server_test_message_socket_general_commands".to_string();
+        let client_addr = "/tmp/replicest_server_test_message_socket_general_commands_client".to_string();
         let _ = remove_file(&client_addr);
         let client = UnixDatagram::bind(&client_addr).unwrap();
 
@@ -485,8 +512,7 @@ mod tests {
 
         thread::sleep(Duration::from_secs(1));
 
-        let user_id = get_current_uid();
-        let socket_addr = format!("/run/user/{}/replicest_server", user_id);
+        let socket_addr = format!("{}/replicest_server", get_default_uds_path());
         client.connect(&socket_addr).unwrap();
 
         client.send(b"clear").unwrap();
