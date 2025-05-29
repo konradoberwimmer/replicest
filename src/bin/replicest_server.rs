@@ -3,8 +3,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::remove_file;
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::net::{UnixDatagram, UnixListener};
 use std::path::PathBuf;
+#[cfg(windows)]
+use directories::{BaseDirs};
 use nalgebra::{DMatrix, DVector};
 use users::get_current_uid;
 use replicest::analysis::*;
@@ -69,25 +72,56 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn setup_sockets(server_socket_addr: Option<PathBuf>, data_socket_addr: Option<PathBuf>) -> Result<(UnixDatagram, UnixListener), Box<dyn Error>> {
-    let user_id = get_current_uid();
+#[cfg(target_os = "linux")]
+fn get_default_uds_path() -> String {    
+    format!("/run/user/{}", get_current_uid())
+}
 
+#[cfg(target_os = "macos")]
+fn get_default_uds_path() -> String {
+    "/tmp".to_string()
+}
+
+#[cfg(unix)]
+fn setup_sockets(server_socket_addr: Option<PathBuf>, data_socket_addr: Option<PathBuf>) -> Result<(UnixDatagram, UnixListener), Box<dyn Error>> {
     let message_socket_addr = match server_socket_addr {
         Some(server_socket_addr) => server_socket_addr,
-        None => format!("/run/user/{}/replicest_server", user_id).parse().unwrap()
+        None => format!("{}/replicest_server", get_default_uds_path()).parse().unwrap()
     };
     let _ = remove_file(&message_socket_addr);
     let message_socket = UnixDatagram::bind(&message_socket_addr)?;
 
     let data_socket_addr = match data_socket_addr {
         Some(data_socket_addr) => data_socket_addr,
-        None => format!("/run/user/{}/replicest_server_data", user_id).parse().unwrap()
+        None => format!("{}/replicest_server_data", get_default_uds_path()).parse().unwrap()
     };
     let _ = remove_file(&data_socket_addr);
     let data_socket = UnixListener::bind(&data_socket_addr)?;
 
     Ok((message_socket, data_socket))
 }
+
+#[cfg(windows)]
+fn setup_sockets(server_socket_addr: Option<PathBuf>, data_socket_addr: Option<PathBuf>) -> Result<(UnixDatagram, UnixListener), Box<dyn Error>> {
+    let base_dirs = BaseDirs::new().expect("could not get base directories");
+    
+    let message_socket_addr = match server_socket_addr {
+        Some(server_socket_addr) => server_socket_addr,
+        None => format!("{}\\Temp\\replicest_server", base_dirs.data_local_dir().to_str()).parse().unwrap()
+    };
+    let _ = remove_file(&message_socket_addr);
+    let message_socket = UnixDatagram::bind(&message_socket_addr)?;
+
+    let data_socket_addr = match data_socket_addr {
+        Some(data_socket_addr) => data_socket_addr,
+        None => format!("{}\\Temp\\replicest_server_data", base_dirs.data_local_dir().to_str()).parse().unwrap()
+    };
+    let _ = remove_file(&data_socket_addr);
+    let data_socket = UnixListener::bind(&data_socket_addr)?;
+
+    Ok((message_socket, data_socket))
+}
+
 
 fn trim_buffer(buffer: &[u8]) -> String {
     let message = String::from_utf8(buffer.to_vec()).unwrap_or("".to_string());
