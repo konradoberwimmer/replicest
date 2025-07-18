@@ -12,9 +12,11 @@ crate-type = ["lib", "cdylib"]
 
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
+directories = "6.0.0"
 nalgebra = "0.33.0"
 rmp-serde = "1.3.0"
 serde = { version = "1.0.210", features = ["derive"] }
+uds_windows = "1.1.0"
 uniffi = { version = "0.25.0"}
 users = "0.11.0"
 
