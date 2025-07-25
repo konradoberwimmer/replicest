@@ -5,6 +5,8 @@ edition = "2021"
 exclude = [
     "misc"
 ]
+license = "LGPL-2"
+authors = [ "Konrad Oberwimmer <konrad.oberwimmer@gmail.com>" ]
 
 [lib]
 name = "replicest"
