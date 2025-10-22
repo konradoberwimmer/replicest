@@ -88,7 +88,7 @@ fn get_default_uds_path() -> String {
 #[cfg(target_os = "windows")]
 fn get_default_uds_path() -> String {
     let base_dirs = BaseDirs::new().expect("could not get base directories");
-    format!("{}\\Temp", base_dirs.data_local_dir().to_str())
+    format!("{}\\Temp", base_dirs.data_local_dir().to_str().unwrap())
 }
 
 fn setup_sockets(server_socket_addr: Option<PathBuf>, data_socket_addr: Option<PathBuf>) -> Result<(UnixDatagram, UnixListener), Box<dyn Error>> {
