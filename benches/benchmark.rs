@@ -97,6 +97,7 @@ criterion_group!(benches,
     benchmark::helper::large_benchmark_split_by,
     benchmark::replication::small_benchmark_mean,
     benchmark::replication::large_benchmark_mean,
-    benchmark::replication::large_benchmark_correlation
+    benchmark::replication::large_benchmark_correlation,
+    benchmark::replication::large_benchmark_linear_regression
 );
 criterion_main!(benches);

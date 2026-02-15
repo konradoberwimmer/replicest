@@ -4,6 +4,7 @@ pub mod helper;
 pub mod external;
 pub mod analysis;
 pub mod errors;
+pub mod data_preparation;
 
 pub use external::*;
 

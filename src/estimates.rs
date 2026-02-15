@@ -300,35 +300,25 @@ pub fn linreg_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, intercept: bool
     assert_validity_of_data_and_weights!(x, wgt, "linreg");
     assert!(x.ncols() > 1 || intercept, "linear regression missing a predictor");
 
-    // take care of NaN by setting such values as well as such weights to zero (listwise)
-    let mut wgt_full = wgt.clone();
-    let mut x_full = x.clone();
-    for (rr, row) in x.row_iter().enumerate() {
-        if row.iter().any(|v| v.is_nan()) {
-            (0..x.ncols()).for_each(|cc| { x_full[(rr, cc)] = 0.0; });
-            wgt_full[rr] = 0.0;
-        }
-    }
-
-    let dep = x_full.column(0);
-    let pre = if x_full.ncols() > 1 && intercept {
-        let mut pre = DMatrix::<f64>::zeros(x_full.nrows(), x_full.ncols());
-        pre.set_column(0, &DVector::<f64>::from_element(x_full.nrows(), 1.0));
-        for cc in 1..x_full.ncols() {
-            pre.set_column(cc, &x_full.column(cc));
+    let dep = x.column(0);
+    let pre = if x.ncols() > 1 && intercept {
+        let mut pre = DMatrix::<f64>::zeros(x.nrows(), x.ncols());
+        pre.set_column(0, &DVector::<f64>::from_element(x.nrows(), 1.0));
+        for cc in 1..x.ncols() {
+            pre.set_column(cc, &x.column(cc));
         }
         pre
-    } else if x_full.ncols() > 1 && !intercept {
-        x_full.columns(1, x_full.ncols() - 1).clone_owned()
+    } else if x.ncols() > 1 && !intercept {
+        x.columns(1, x.ncols() - 1).clone_owned()
     } else {
-        DMatrix::<f64>::from_element(x_full.nrows(), 1, 1.0)
+        DMatrix::<f64>::from_element(x.nrows(), 1, 1.0)
     };
 
     let dep_weighted = DMatrix::<f64>::from_columns(
-        &Vec::from_iter(dep.column_iter().map(|c| c.component_mul(&wgt_full)))
+        &Vec::from_iter(dep.column_iter().map(|c| c.component_mul(&wgt)))
     );
     let pre_weighted = DMatrix::<f64>::from_columns(
-        &Vec::from_iter(pre.column_iter().map(|c| c.component_mul(&wgt_full)))
+        &Vec::from_iter(pre.column_iter().map(|c| c.component_mul(&wgt)))
     );
 
     let pre_transposed = pre.transpose();
@@ -338,24 +328,24 @@ pub fn linreg_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, intercept: bool
     let coeffs = pre_transposed_weighted.qr().solve(&pre_transposed_dep).expect("failed to solve linear regression");
     assert_eq!(coeffs.ncols(), 1, "unrecognized coefficient vector");
 
-    let k = x_full.ncols() - 1 + intercept as usize;
+    let k = x.ncols() - 1 + intercept as usize;
     let mut parameter_names = Vec::new();
     let mut estimates = Vec::<f64>::new();
 
     if intercept {
         parameter_names.push("linreg_b_intercept".to_string());
     }
-    for xx in 1..x_full.ncols() {
+    for xx in 1..x.ncols() {
         parameter_names.push(format!("linreg_b_X{}", xx));
     }
     coeffs.iter().for_each(|v| estimates.push(*v));
 
-    let sum_of_weights = wgt_full.sum();
+    let sum_of_weights = wgt.sum();
     let errors = &dep - (pre * &coeffs);
-    let sum_of_squared_errors = DVector::<f64>::from_iterator(dep.nrows(), errors.iter().map(|v| v.powf(2.0))).component_mul(&wgt_full).sum();
+    let sum_of_squared_errors = DVector::<f64>::from_iterator(dep.nrows(), errors.iter().map(|v| v.powf(2.0))).component_mul(&wgt).sum();
     let sigma = (sum_of_squared_errors / (sum_of_weights - k as f64)).sqrt();
     let dep_mean = &dep.component_mul(&wgt).sum() / sum_of_weights;
-    let sum_of_squared_total = DVector::<f64>::from_iterator(dep.nrows(), dep.iter().map(|v| (v - dep_mean).powf(2.0))).component_mul(&wgt_full).sum();
+    let sum_of_squared_total = DVector::<f64>::from_iterator(dep.nrows(), dep.iter().map(|v| (v - dep_mean).powf(2.0))).component_mul(&wgt).sum();
     let r2 = 1.0 - sum_of_squared_errors / sum_of_squared_total;
 
     parameter_names.push("linreg_sigma".to_string());
@@ -363,25 +353,25 @@ pub fn linreg_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, intercept: bool
     parameter_names.push("linreg_R2".to_string());
     estimates.push(r2);
 
-    let means = mean(&x_full, &wgt_full).estimates;
+    let means = mean(&x, &wgt).estimates;
     let x_full_centered = DMatrix::<f64>::from_columns(
-        &Vec::from_iter(x_full.column_iter().enumerate().map(|(i, c)| c.clone_owned() - DVector::<f64>::from_element(c.nrows(), means[i])))
+        &Vec::from_iter(x.column_iter().enumerate().map(|(i, c)| c.clone_owned() - DVector::<f64>::from_element(c.nrows(), means[i])))
     );
     let x_full_centered_weighted = DMatrix::<f64>::from_columns(
-        &Vec::from_iter(x_full_centered.column_iter().map(|c| c.component_mul(&wgt_full)))
+        &Vec::from_iter(x_full_centered.column_iter().map(|c| c.component_mul(&wgt)))
     );
     let covariance_matrix = x_full_centered.transpose() * x_full_centered_weighted;
     let std_devs = DVector::<f64>::from_iterator(covariance_matrix.nrows(), covariance_matrix.diagonal().iter().map(|v| v.sqrt()));
 
     let std_coeffs = if !intercept {
-        coeffs.component_mul(&std_devs.rows(1, x_full.ncols() - 1)) / std_devs[0]
-    } else if intercept && x_full.ncols() > 1 {
-        coeffs.rows(1, coeffs.nrows() - 1).component_mul(&std_devs.rows(1, x_full.ncols() - 1)) / std_devs[0]
+        coeffs.component_mul(&std_devs.rows(1, x.ncols() - 1)) / std_devs[0]
+    } else if intercept && x.ncols() > 1 {
+        coeffs.rows(1, coeffs.nrows() - 1).component_mul(&std_devs.rows(1, x.ncols() - 1)) / std_devs[0]
     } else {
         DVector::<f64>::zeros(0)
     };
 
-    for xx in 1..x_full.ncols() {
+    for xx in 1..x.ncols() {
         parameter_names.push(format!("linreg_beta_X{}", xx));
     }
     std_coeffs.iter().for_each(|v| estimates.push(*v));
@@ -1006,10 +996,6 @@ mod tests {
             "linreg_beta_X1", "linreg_beta_X2",
         ]);
 
-        assert_approx_eq_iter_f64!(result.estimates, vec![
-            0.35714285714285737, 0.78571428571428614, -0.21428571428571461,
-            0.3779644730092272, 0.64285714285714279,
-            0.76076458586217155, -0.20748125068968337,
-        ]);
+        assert!(result.estimates.iter().all(|v| v.is_nan()));
     }
 }

@@ -27,6 +27,7 @@ fn main() {
 
     let result = replication::replicate_estimates(
         Arc::new(estimates::correlation),
+        None,
         &vec![&data],
         &vec![&wgts],
         &vec![&replicate_weights],

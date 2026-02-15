@@ -1,7 +1,7 @@
-use std::sync::{mpsc, Arc};
+use crate::estimates::Estimates;
 use nalgebra::{DMatrix, DVector};
+use std::sync::{mpsc, Arc};
 use std::thread;
-use crate::estimates;
 
 #[derive(Debug)]
 #[derive(Clone)]
@@ -43,7 +43,7 @@ impl ReplicatedEstimates {
     }
 }
 
-pub fn replicate_estimates(estimator: Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync>, x: &Vec<&DMatrix<f64>>, weights: &Vec<&DVector<f64>>, replicate_wgts: &Vec<&DMatrix<f64>>, factor: f64) -> ReplicatedEstimates {
+pub fn replicate_estimates(estimator: Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> Estimates + Send + Sync>, data_preparation: Option<Arc<dyn Fn(&mut DMatrix<f64>, &mut DVector<f64>, &mut DMatrix<f64>) + Send + Sync>>, x: &Vec<&DMatrix<f64>>, weights: &Vec<&DVector<f64>>, replicate_wgts: &Vec<&DMatrix<f64>>, factor: f64) -> ReplicatedEstimates {
     assert!(weights.len() == 1 || weights.len() == x.len(), "length mismatch of weights and data in replicate_estimates");
     assert!(replicate_wgts.len() == 1 || replicate_wgts.len() == x.len(), "length mismatch of replicate weights and data in replicate_estimates");
 
@@ -65,21 +65,14 @@ pub fn replicate_estimates(estimator: Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -
             };
             let transmitter1 = transmitter.clone();
             let estimator1 = estimator.clone();
+            let data_preparation1 = data_preparation.clone();
 
             scope.spawn(move || {
-                let estimates_imputation = estimator1(&data, weight);
-
-                let sampling_variances_imputation: DVector<f64> = if repweights.ncols() > 0 {
-                    let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(estimates_imputation.estimates().len(), repweights.ncols());
-                    for c in 0..repweights.ncols() {
-                        let estimates0 = estimator1(&data, &DVector::from(repweights.column(c)));
-                        replicated_estimates.set_column(c, &estimates0.estimates());
-                    }
-
-                    calc_replication_variance(&estimates_imputation.estimates(), &replicated_estimates, factor)
-                } else {
-                    DVector::<f64>::zeros(estimates_imputation.estimates().len())
+                let (estimates_imputation, sampling_variances_imputation) = match data_preparation1 {
+                    None => calculate_without_data_preparation(&estimator1.as_ref(), &data, &weight, &repweights, factor),
+                    Some(preparation) => calculate_with_data_preparation(&preparation.as_ref(), &estimator1.as_ref(), &data, &weight, &repweights, factor),
                 };
+
                 transmitter1.send((estimates_imputation, sampling_variances_imputation)).unwrap();
             });
         }
@@ -116,6 +109,48 @@ pub fn replicate_estimates(estimator: Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -
     }
 }
 
+fn calculate_without_data_preparation(estimator: &dyn Fn(&DMatrix<f64>, &DVector<f64>) -> Estimates, data: &DMatrix<f64>, weight: &DVector<f64>, repweights: &DMatrix<f64>, factor: f64) -> (Estimates, DVector<f64>) {
+    let estimates_imputation = estimator(&data, &weight);
+
+    let sampling_variances_imputation: DVector<f64> = if repweights.ncols() > 0 {
+        let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(estimates_imputation.estimates().len(), repweights.ncols());
+        for c in 0..repweights.ncols() {
+            let estimates0 = estimator(&data, &DVector::from(repweights.column(c)));
+            replicated_estimates.set_column(c, &estimates0.estimates());
+        }
+
+        calc_replication_variance(&estimates_imputation.estimates(), &replicated_estimates, factor)
+    } else {
+        DVector::<f64>::zeros(estimates_imputation.estimates().len())
+    };
+
+    (estimates_imputation, sampling_variances_imputation)
+}
+
+fn calculate_with_data_preparation(data_preparation: &dyn Fn(&mut DMatrix<f64>, &mut DVector<f64>, &mut DMatrix<f64>), estimator: &dyn Fn(&DMatrix<f64>, &DVector<f64>) -> Estimates, data: &DMatrix<f64>, weight: &DVector<f64>, repweights: &DMatrix<f64>, factor: f64) -> (Estimates, DVector<f64>) {
+    let mut prepared_data = data.clone();
+    let mut prepared_weight = weight.clone();
+    let mut prepared_repweights = repweights.clone();
+
+    data_preparation(&mut prepared_data, &mut prepared_weight, &mut prepared_repweights);
+
+    let estimates_imputation = estimator(&prepared_data, &prepared_weight);
+
+    let sampling_variances_imputation: DVector<f64> = if prepared_repweights.ncols() > 0 {
+        let mut replicated_estimates: DMatrix<f64> = DMatrix::<f64>::zeros(estimates_imputation.estimates().len(), prepared_repweights.ncols());
+        for c in 0..prepared_repweights.ncols() {
+            let estimates0 = estimator(&prepared_data, &DVector::from(prepared_repweights.column(c)));
+            replicated_estimates.set_column(c, &estimates0.estimates());
+        }
+
+        calc_replication_variance(&estimates_imputation.estimates(), &replicated_estimates, factor)
+    } else {
+        DVector::<f64>::zeros(estimates_imputation.estimates().len())
+    };
+
+    (estimates_imputation, sampling_variances_imputation)
+}
+
 fn calc_replication_variance(estimates: &DVector<f64>, replicated_estimates: &DMatrix<f64>, factor: f64) -> DVector<f64> {
     assert_eq!(estimates.len(), replicated_estimates.nrows(), "dimension mismatch of estimates and replicated_estimates in calc_replication_variance");
 
@@ -133,10 +168,10 @@ fn calc_standard_errors_from_variances(sampling_variances: &DVector<f64>, imputa
 
 #[cfg(test)]
 mod tests {
-    use nalgebra::{dmatrix, dvector};
+    use super::*;
     use crate::assert_approx_eq_iter_f64;
     use crate::estimates::{mean, missings};
-    use super::*;
+    use nalgebra::{dmatrix, dvector};
 
     #[test]
     fn test_replicated_estimates_append() {
@@ -155,8 +190,8 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let mut result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
-        let counts = replicate_estimates(Arc::new(missings), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
+        let mut result = replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
+        let counts = replicate_estimates(Arc::new(missings), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
 
         result.append(counts);
 
@@ -188,7 +223,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
+        let result = replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0/3.0);
         assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_eq!(result.sampling_variances, dvector![0.6370833333333332, 0.18843749999999995, 0.815, 1.0416666666666665]);
         assert_eq!(result.imputation_variances, dvector![0.0, 0.0, 0.0, 0.0]);
@@ -220,7 +255,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
-        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
+        let result = replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
         assert_approx_eq_iter_f64!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_approx_eq_iter_f64!(result.sampling_variances, dvector![0.0, 0.0, 0.0, 0.0]);
         assert_approx_eq_iter_f64!(result.imputation_variances, dvector![0.0069444444444443955, 0.0, 0.0002777777777777758, 0.0]);
@@ -256,7 +291,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
+        let result = replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 1.0);
         assert_eq!(4, result.parameter_names.len());
         assert_eq!("mean_x2", result.parameter_names[1]);
         assert_approx_eq_iter_f64!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
@@ -283,7 +318,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
+        replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
     }
 
     #[test]
@@ -303,7 +338,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
+        let result = replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
         assert_eq!(1, result.parameter_names.len());
         assert_eq!("mean_x1", result.parameter_names[0]);
         assert_eq!(1, result.final_estimates.len());
@@ -325,7 +360,7 @@ mod tests {
         let wgt = dvector![1.0, 0.5, 1.5];
         let rep_wgts = DMatrix::from_row_slice(3, 0, &[]);
 
-        let result = replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
+        let result = replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt], &vec![&rep_wgts], 2.0_f64/3.0_f64);
         assert_eq!(result.final_estimates, dvector![2.25, 3.125, 2.0, -2.5]);
         assert_eq!(result.sampling_variances, dvector![0.0, 0.0, 0.0, 0.0]);
     }
@@ -424,7 +459,7 @@ mod tests {
 
         let wgt = dvector![1.0, 0.5, 1.5];
 
-        replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt, &wgt], &vec![], 1.0);
+        replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt, &wgt], &vec![], 1.0);
     }
 
     #[test]
@@ -445,7 +480,7 @@ mod tests {
             1.5, 1.5, 0.0,
         ]);
 
-        replicate_estimates(Arc::new(mean), &imp_data, &vec![&wgt, &wgt, &wgt], &vec![&rep_wgts, &rep_wgts, &rep_wgts, &rep_wgts], 1.0);
+        replicate_estimates(Arc::new(mean), None, &imp_data, &vec![&wgt, &wgt, &wgt], &vec![&rep_wgts, &rep_wgts, &rep_wgts, &rep_wgts], 1.0);
     }
 
     #[test]
@@ -502,7 +537,7 @@ mod tests {
         imp_repwgt.push(&repwgt3);
         imp_repwgt.push(&repwgt4);
 
-        let result = replicate_estimates(Arc::new(mean), &imp_data, &imp_wgt, &imp_repwgt, 1.0);
+        let result = replicate_estimates(Arc::new(mean), None, &imp_data, &imp_wgt, &imp_repwgt, 1.0);
         assert_eq!(1, result.final_estimates.len());
         assert_approx_eq_iter_f64!(result.final_estimates, vec![5.9289630325814535]);
         assert_approx_eq_iter_f64!(result.sampling_variances, vec![1.1564444389077233]);

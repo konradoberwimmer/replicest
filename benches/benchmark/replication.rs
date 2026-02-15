@@ -35,6 +35,7 @@ pub fn small_benchmark_mean(c: &mut Criterion) {
 
         let _ = replication::replicate_estimates(
             black_box(Arc::new(estimates::mean)),
+            black_box(None),
             black_box(&imp_data),
             black_box(&vec![&wgt]),
             black_box(&vec![&rep_wgts]),
@@ -52,6 +53,7 @@ pub fn large_benchmark_mean(c: &mut Criterion) {
     c.bench_function("mean n10000 c5 i5 wgt50", |b| b.iter(|| {
         replication::replicate_estimates(
             black_box(Arc::new(estimates::mean)),
+            black_box(None),
             black_box(&x),
             black_box(&vec![&test_data.wgt]),
             black_box(&vec![&test_data.repwgt]),
@@ -70,6 +72,26 @@ pub fn large_benchmark_correlation(c: &mut Criterion) {
     c.bench_function("correlation n10000 c5 i5 wgt50", |b| b.iter(|| {
         replication::replicate_estimates(
             black_box(Arc::new(estimates::correlation)),
+            black_box(None),
+            black_box(&x),
+            black_box(&vec![&test_data.wgt]),
+            black_box(&vec![&test_data.repwgt]),
+            black_box(1.0)
+        );
+    }));
+}
+
+pub fn large_benchmark_linear_regression(c: &mut Criterion) {
+    let test_data = super::fetch_test_dataset();
+    let mut x = Vec::new();
+    for data1 in test_data.data.iter() {
+        x.push(data1);
+    }
+
+    c.bench_function("linreg n10000 c5 i5 wgt50", |b| b.iter(|| {
+        replication::replicate_estimates(
+            black_box(Arc::new(estimates::linreg)),
+            black_box(None),
             black_box(&x),
             black_box(&vec![&test_data.wgt]),
             black_box(&vec![&test_data.repwgt]),

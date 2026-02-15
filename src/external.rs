@@ -95,6 +95,7 @@ pub fn replicate_estimates(estimate: Estimate, options: HashMap<String, String>,
 
     let result = replication::replicate_estimates(
         estimate_function,
+        None,
         &ref_data,
         &ref_weights,
         &ref_replicate_weights,

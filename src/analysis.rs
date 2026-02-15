@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use nalgebra::{DMatrix, DVector};
 use crate::errors::{InconsistencyError, MissingElementError};
-use crate::estimates;
+use crate::{data_preparation, estimates};
 use crate::helper::Split;
 use crate::replication::{replicate_estimates, ReplicatedEstimates};
 
@@ -24,6 +24,7 @@ pub struct Analysis {
     estimate_name: Option<String>,
     estimate: Option<Arc<dyn Fn(&DMatrix<f64>, &DVector<f64>) -> estimates::Estimates + Send + Sync>>,
     options: HashMap<String, String>,
+    data_preparation: Option<Arc<dyn Fn(&mut DMatrix<f64>, &mut DVector<f64>, &mut DMatrix<f64>) + Send + Sync>>,
 }
 
 pub fn analysis() -> Analysis {
@@ -37,6 +38,7 @@ pub fn analysis() -> Analysis {
         estimate_name: None,
         estimate: None,
         options: HashMap::new(),
+        data_preparation: None,
     }
 }
 
@@ -104,6 +106,7 @@ impl Analysis {
             true
         };
         self.estimate = Some(Arc::new(move |x, wgt| estimates::linreg_with_options(x, wgt, intercept.clone())));
+        self.data_preparation = Some(Arc::new(data_preparation::listwise_delete));
         self
     }
 
@@ -324,6 +327,7 @@ impl Analysis {
         for key in keys {
             let mut result = replicate_estimates(
                 self.estimate.as_ref().unwrap().clone(),
+                self.data_preparation.clone(),
                 x_split.get(&key).unwrap(),
                 wgt_split.get(&key).unwrap(),
                 repwgt_split.get(&key).unwrap(),
@@ -333,6 +337,7 @@ impl Analysis {
             if self.with_counts {
                 let counts = replicate_estimates(
                     Arc::new(estimates::missings),
+                    self.data_preparation.clone(),
                     x_split.get(&key).unwrap(),
                     wgt_split.get(&key).unwrap(),
                     repwgt_split.get(&key).unwrap(),
@@ -403,6 +408,10 @@ impl Analysis {
                 Some(estimate) => Some(Arc::clone(estimate)),
             },
             options: self.options.clone(),
+            data_preparation: match &self.data_preparation {
+                None => None,
+                Some(preparation) => Some(Arc::clone(preparation)),
+            },
         }
     }
 }

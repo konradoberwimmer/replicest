@@ -4,6 +4,27 @@ rm(list=ls())
 source("./quantiles.R")
 options(scipen = 99)
 
+# benchmark data ----
+
+## linear regression ----
+dat <- list()
+for (i in 1:5) {
+  dat1 <- cbind(read.csv("~/RustroverProjects/replicest/tests/_data/imp1.csv", header = FALSE),
+                read.csv("~/RustroverProjects/replicest/tests/_data/repwgt.csv", header = FALSE),
+                read.csv("~/RustroverProjects/replicest/tests/_data/wgt.csv", header = FALSE))
+  colnames(dat1) <- c(paste0("x", 1:5), paste0("rep", 1:50), "wgt")
+  dat[[i]] <- dat1
+}
+
+dat.BO <- BIFIEsurvey::BIFIE.data(dat, wgt = "wgt", wgtrep = dat[[1]][,grep("rep", colnames(dat[[1]]), value = TRUE)])
+
+times <- numeric(0)
+
+for (jj in 1:100) {
+  res.linreg <- BIFIEsurvey::BIFIE.linreg(dat.BO, formula = x1 ~ x2 + x3 + x4 + x5)
+  times <- c(times, as.numeric(res.linreg$timediff[2] - res.linreg$timediff[1]))
+}
+
 # artificial data ----
 
 df_wgts = data.frame(
