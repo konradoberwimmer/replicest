@@ -98,6 +98,9 @@ criterion_group!(benches,
     benchmark::replication::small_benchmark_mean,
     benchmark::replication::large_benchmark_mean,
     benchmark::replication::large_benchmark_correlation,
-    benchmark::replication::large_benchmark_linear_regression
+    benchmark::replication::large_benchmark_correlation_without_pairwise_delete,
+    benchmark::replication::large_benchmark_correlation_with_listwise_delete,
+    benchmark::replication::large_benchmark_linear_regression,
+    benchmark::replication::large_benchmark_linear_regression_without_listwise_deletion
 );
 criterion_main!(benches);

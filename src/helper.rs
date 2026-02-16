@@ -264,13 +264,21 @@ macro_rules! assert_approx_eq_iter_f64 {
     ( $x: expr, $y: expr, $eps: literal ) => {
         assert_eq!($x.len(), $y.len(), "unequal length");
         for (i, value) in $x.iter().enumerate() {
-            assert!(f64::abs(value - $y.get(i).unwrap()) < $eps, "unequal value (epsilon {}) at index {}", $eps, i);
+            if ((*value as f64).is_nan()) {
+                assert!((*$y.get(i).unwrap() as f64).is_nan(), "unequal value (NaN) at index {}", i);
+            } else {
+                assert!(f64::abs(value - $y.get(i).unwrap()) < $eps, "unequal value (epsilon {}) at index {}", $eps, i);
+            }
         }
     };
     ( $x: expr, $y: expr ) => {
         assert_eq!($x.len(), $y.len(), "unequal length");
         for (i, value) in $x.iter().enumerate() {
-            assert!(f64::abs(value - $y.get(i).unwrap()) < 1e-10, "unequal value at index {}", i);
+            if ((*value as f64).is_nan()) {
+                assert!((*$y.get(i).unwrap() as f64).is_nan(), "unequal value (NaN) at index {}", i);
+            } else {
+                assert!(f64::abs(value - $y.get(i).unwrap()) < 1e-10, "unequal value at index {}", i);
+            }
         }
     };
 }

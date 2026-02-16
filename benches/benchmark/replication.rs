@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use criterion::{black_box, Criterion};
 use nalgebra::{dvector, DMatrix};
-use replicest::replication;
+use replicest::{data_preparation, replication};
 use replicest::estimates;
 
 pub fn small_benchmark_mean(c: &mut Criterion) {
@@ -81,6 +81,44 @@ pub fn large_benchmark_correlation(c: &mut Criterion) {
     }));
 }
 
+pub fn large_benchmark_correlation_without_pairwise_delete(c: &mut Criterion) {
+    let test_data = super::fetch_test_dataset();
+    let mut x = Vec::new();
+    for data1 in test_data.data.iter() {
+        x.push(data1);
+    }
+
+    c.bench_function("correlation without pairwise deletion n10000 c5 i5 wgt50", |b| b.iter(|| {
+        replication::replicate_estimates(
+            black_box(Arc::new(move |x, wgt| estimates::correlation_with_options(&x, &wgt, false))),
+            black_box(None),
+            black_box(&x),
+            black_box(&vec![&test_data.wgt]),
+            black_box(&vec![&test_data.repwgt]),
+            black_box(1.0)
+        );
+    }));
+}
+
+pub fn large_benchmark_correlation_with_listwise_delete(c: &mut Criterion) {
+    let test_data = super::fetch_test_dataset();
+    let mut x = Vec::new();
+    for data1 in test_data.data.iter() {
+        x.push(data1);
+    }
+
+    c.bench_function("correlation with listwise deletion n10000 c5 i5 wgt50", |b| b.iter(|| {
+        replication::replicate_estimates(
+            black_box(Arc::new(move |x, wgt| estimates::correlation_with_options(&x, &wgt, false))),
+            black_box(Some(Arc::new(data_preparation::listwise_delete))),
+            black_box(&x),
+            black_box(&vec![&test_data.wgt]),
+            black_box(&vec![&test_data.repwgt]),
+            black_box(1.0)
+        );
+    }));
+}
+
 pub fn large_benchmark_linear_regression(c: &mut Criterion) {
     let test_data = super::fetch_test_dataset();
     let mut x = Vec::new();
@@ -89,6 +127,25 @@ pub fn large_benchmark_linear_regression(c: &mut Criterion) {
     }
 
     c.bench_function("linreg n10000 c5 i5 wgt50", |b| b.iter(|| {
+        replication::replicate_estimates(
+            black_box(Arc::new(estimates::linreg)),
+            black_box(Some(Arc::new(data_preparation::listwise_delete))),
+            black_box(&x),
+            black_box(&vec![&test_data.wgt]),
+            black_box(&vec![&test_data.repwgt]),
+            black_box(1.0)
+        );
+    }));
+}
+
+pub fn large_benchmark_linear_regression_without_listwise_deletion(c: &mut Criterion) {
+    let test_data = super::fetch_test_dataset();
+    let mut x = Vec::new();
+    for data1 in test_data.data.iter() {
+        x.push(data1);
+    }
+
+    c.bench_function("linreg without listwise deletion n10000 c5 i5 wgt50", |b| b.iter(|| {
         replication::replicate_estimates(
             black_box(Arc::new(estimates::linreg)),
             black_box(None),

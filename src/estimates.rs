@@ -233,7 +233,7 @@ pub fn mean(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
     }
 }
 
-pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
+pub fn correlation_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, pairwise_delete: bool) -> Estimates {
     assert_validity_of_data_and_weights!(x, wgt, "correlation");
 
     let means = mean(&x, &wgt).estimates;
@@ -241,18 +241,19 @@ pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
         &Vec::from_iter(x.column_iter().enumerate().map(|(i, c)| c.clone_owned() - DVector::<f64>::from_element(c.nrows(), means[i])))
     );
 
-    // take care of NaN by setting such values as well as such weights to zero (pairwise)
-    let mut weights_by_column : Vec<DVector<f64>> = Vec::new();
-    for i in 0..x_centered.ncols() {
-        weights_by_column.push(wgt.clone());
-        for j in 0..x_centered.nrows() {
-            if x_centered[(j, i)].is_nan() {
-                x_centered[(j, i)] = 0.0;
-                weights_by_column[i][j] = 0.0;
+    let mut weights_by_column: Vec<DVector<f64>> = (0..x_centered.ncols()).map(|_| wgt.clone()).collect();
+    if pairwise_delete {
+        for i in 0..x_centered.ncols() {
+            weights_by_column.push(wgt.clone());
+            for j in 0..x_centered.nrows() {
+                if x_centered[(j, i)].is_nan() {
+                    x_centered[(j, i)] = 0.0;
+                    weights_by_column[i][j] = 0.0;
+                }
             }
         }
     }
-    let weights_by_column_sum : Vec<f64> = weights_by_column.iter().map(|w| w.sum()).collect();
+    let weights_by_column_sum: Vec<f64> = weights_by_column.iter().map(|w| w.sum()).collect();
 
     let x_centered_weighted = DMatrix::<f64>::from_columns(
         &Vec::from_iter(x_centered.column_iter().map(|c| c.component_mul(wgt)))
@@ -294,6 +295,10 @@ pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
         parameter_names,
         estimates,
     }
+}
+
+pub fn correlation(x: &DMatrix<f64>, wgt: &DVector<f64>) -> Estimates {
+    correlation_with_options(x, wgt, true)
 }
 
 pub fn linreg_with_options(x: &DMatrix<f64>, wgt: &DVector<f64>, intercept: bool) -> Estimates {
@@ -821,7 +826,7 @@ mod tests {
     }
 
     #[test]
-    fn test_correlation_with_nan() {
+    fn test_correlation_with_nan_pairwise_delete() {
         let data = DMatrix::from_row_slice(5, 3, &[
             1.0, 2.0, 3.0,
             2.0, 1.0, 1.0,
@@ -838,6 +843,27 @@ mod tests {
         assert_approx_eq_iter_f64!(result.estimates, dvector![
             2.3636363636363638, -0.18181818181818182, 0.727272727272726, 0.6433566433566433, 0.484848484848484, 1.131313131313130,
             1.0, -0.147441956154897, 0.4447495899966607, 1.0, 0.56831449608436613, 1.0
+        ]);
+    }
+
+    #[test]
+    fn test_correlation_with_nan_no_pairwise_delete() {
+        let data = DMatrix::from_row_slice(5, 3, &[
+            1.0, 2.0, 3.0,
+            2.0, 1.0, 1.0,
+            3.0, 3.0, 3.0,
+            4.0, 2.0, f64::NAN,
+            5.0, 1.0, 3.0,
+        ]);
+
+        let wgt = dvector![1.0, 2.0, 1.0, 1.0, 1.5];
+
+        let result = correlation_with_options(&data, &wgt, false);
+        assert_eq!(result.parameter_names.len(), 12);
+        assert_eq!(result.parameter_names[2], "covariance_x1_x3");
+        assert_approx_eq_iter_f64!(result.estimates, dvector![
+            2.3636363636363638, -0.18181818181818182, f64::NAN, 0.6433566433566433, f64::NAN, f64::NAN,
+            f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN
         ]);
     }
 
