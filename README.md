@@ -1,10 +1,10 @@
 # replicest
-Crate replicest offers calculation of statistical coefficients and their standard errors common in Large Scale Assessment (LSA).
+Crate replicest offers calculations of statistical coefficients and their standard errors common in Large Scale Assessment (LSA).
 
 ## Usage from within Rust
 
 ### Elementary functions
-You can of course just use the elementary (pure) functions exposed by the crate. 
+You can, of course, use the elementary (pure) functions exposed by the crate. 
 See [example elementary_functions_usage.rs](examples/elementary_functions_usage.rs).
 
 API doc: [https://konradoberwimmer.github.io/replicest/](https://konradoberwimmer.github.io/replicest/)
@@ -14,7 +14,7 @@ A more convenient way to use this crate for calculation is via the fluent API pr
 See [example fluent_api_usage.rs](examples/fluent_api_usage.rs).
 
 Most importantly, when an Analysis struct instance is cloned, a shallow copy with references to already provided data, 
-weights or replicate weights is created. This allows for memory efficient calculation of multiple estimates of multiple 
+weights or replicate weights is created. This allows for memory-efficient calculation of multiple estimates of multiple 
 data vectors.
 
 ## Usage from other languages
@@ -23,7 +23,7 @@ data vectors.
 When building the library, bindings for C# and Python are created automatically via [UniFFI](https://mozilla.github.io/uniffi-rs/latest/) (see [build.rs](build.rs)) into folder [/bindings](./bindings).
 
 You can use those bindings to call directly into the dynamic system library (libreplicest.so or libreplicest.dll).
-Just make sure your C# or Python project references the library and the bindings correctly.
+Make sure your C# or Python project references the library and the bindings correctly.
 
 #### C#.NET example
 A) Reference and use the bindings.
@@ -66,15 +66,13 @@ var result = ReplicestMethods.ReplicateEstimates(
 Console.WriteLine($"R-squared is {result.finalEstimates[2]} with standard error of {result.standardErrors[2]}");
 ```
 
-### replicest_server (via Unix Domain Socket)
-Another way to use the capacities of replicest from outside of Rust is to build and start up the binary [replicest_server](./src/bin/replicest_server.rs) and communicate with that process over Unix Domain Sockets (UDS).
+### replicest_server (via TCP)
+Another way to use the capacities of replicest from outside Rust is to build and start up the binary [replicest_server](./src/bin/replicest_server.rs) and communicate with that process over TCP.
 
 #### C#.NET example
 A) Prepare a class for ReplicatedEstimates that can be (de-)serialized using MessagePack.
 ```
 using MessagePack;
-
-namespace TestReplicestServer;
 
 [MessagePackObject]
 public class ReplicatedEstimates
@@ -96,24 +94,24 @@ public class ReplicatedEstimates
     }
 }
 ```
-Note: replicest_server uses [MessagePack](https://msgpack.org/) to serialize calculation results and send them over UDS. To keep message sizes small, no meta information is included, so make sure that a class or struct in a foreign language matches struct ReplicatedEstimates from [replication.rs](./src/replication.rs).
+Note: replicest_server uses [MessagePack](https://msgpack.org/) to serialize calculation results and send them over TCP. To keep message sizes small, no meta-information is included, so make sure that a class or struct in a foreign language matches struct ReplicatedEstimates from [replication.rs](./src/replication.rs).
 
-B) Start replicest_server as child process and setup UDS paths.
+B) Start replicest_server as a child process and set up TCP ports.
+
+Note: The following is just a most simple example. In productive code, choosing ports and waiting for the server to listen has to be done with more care.
 ```
 using System.Diagnostics;
 using System.Net.Sockets;
-using System.Text;
-using MessagePack;
-using TestReplicestServer;
 
-if (File.Exists("/tmp/my_client")) File.Delete("/tmp/my_client");
-Process.Start("../../RustroverProjects/replicest/target/debug/replicest_server", "-s /tmp/my_replicest_server -d /tmp/my_replicest_server_data");
+Process.Start("/path/to/replicest_server", "-s 8098 -d 8099");
+Thread.Sleep(1000);
 
-Socket socket = new(AddressFamily.Unix, SocketType.Dgram, ProtocolType.Unspecified);
-socket.Bind(new UnixDomainSocketEndPoint("/tmp/my_client"));
-socket.Connect(new UnixDomainSocketEndPoint("/tmp/my_replicest_server"));
+TcpClient client = new("127.0.0.1", 8098);
+var stream = client.GetStream();
+StreamWriter writer = new(stream);
+StreamReader reader = new(stream);
 ```
-Note: replicest_server uses two sockets - one for commands (type Datagram) and one for incoming data, weights and replicate weights vectors (type Stream).
+Note: replicest_server uses two ports, one for commands and one for incoming data, weights and replicate weights vectors.
 
 C) Load or produce some data.
 ```
@@ -135,34 +133,28 @@ var repWeights = Enumerable.Range(0, weights.Count).Select(rr => {
 }).ToList();
 ```
 
-D) For ease of use, prepare some functions that wrap single communication steps, eg.
+D) For ease of use, prepare some functions that wrap single communication steps, e.g.,
 ```
-var buffer = new byte[65536];
+void SendAndPrintResponse(string message, List<byte[]> data) {
+    writer.WriteLine(message);
+    writer.Flush();
 
-void SendAndPrintResponse(ReadOnlySpan<byte> message, List<byte[]>? data = null) {
-    socket.Send(message);
-
-    if (data != null)
+    foreach (var data0 in data)
     {
-        foreach (var data0 in data)
-        {
-            Socket dataSocket = new(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-            dataSocket.Connect(new UnixDomainSocketEndPoint("/tmp/my_replicest_server_data"));
-            dataSocket.Send(data0);
-            dataSocket.Close();
-        }
+        TcpClient dataClient = new("127.0.0.1", 8099);
+        dataClient.GetStream().Write(data0);
+        dataClient.Close();
     }
 
-    socket.Receive(buffer);
+    var response = reader.ReadLine();
 
-    Console.WriteLine(Encoding.Default.GetString(buffer));
-
-    Array.Clear(buffer, 0, buffer.Length);
+    Console.WriteLine(response ?? "No response");
 }
 
 void ReceiveAndPrintResult()
 {
-    socket.Receive(buffer);
+    var buffer = new byte[65536];
+    stream.Read(buffer, 0, buffer.Length);
 
     var result = MessagePackSerializer.Deserialize<Dictionary<string[], ReplicatedEstimates>>(buffer);
     foreach (var key in result.Keys)
@@ -176,6 +168,8 @@ void ReceiveAndPrintResult()
 
 E) Communicate with replicest_server.
 ```
+SendAndPrintResponse("mean", []);
+
 List<byte[]> dataStream = x.
     Select(imp => imp.
         Select(row => row.
@@ -183,30 +177,29 @@ List<byte[]> dataStream = x.
             SelectMany(a => a).ToArray())
         .SelectMany(a => a).ToArray())
     .ToList();
-SendAndPrintResponse("data 5 2"u8, dataStream);
+SendAndPrintResponse("data 5 2", dataStream);
 
 List<byte[]> weightsStream = [ weights.
     Select(value => BitConverter.GetBytes(value)).
     SelectMany(w => w).ToArray() ];
-SendAndPrintResponse("weights"u8, weightsStream);
+SendAndPrintResponse("weights", weightsStream);
 
 List<byte[]> repWeightsStream = [ repWeights.
     Select(row => row.
         Select(value => BitConverter.GetBytes(value)).
         SelectMany(w => w).ToArray())
     .SelectMany(w => w).ToArray() ];
-SendAndPrintResponse("replicate weights 6"u8, repWeightsStream);
+SendAndPrintResponse("replicate weights 6", repWeightsStream);
 
-SendAndPrintResponse("mean"u8);
-SendAndPrintResponse("calculate"u8);
+SendAndPrintResponse("calculate", []);
 ReceiveAndPrintResult();
 
-SendAndPrintResponse("shutdown"u8);
+SendAndPrintResponse("shutdown", []);
 
-socket.Disconnect(false);
+client.Close();
 ```
 Note:
 
-- Matrices (data, groups and replicate weights) are again transmitted as byte-streams in row-major order.
-- Imputations (data and groups) are transmitted separately but within one command of "data" or "gropus".
-- For a full list of commands see [replicest_server.md](./docs/replicest_server.md).
+- Matrices (data, groups and replicate weights) are transmitted as byte-streams in row-major order.
+- Imputations (data and groups) are transmitted separately but within one command of "data" or "groups".
+- For a full list of commands, see [replicest_server.md](./docs/replicest_server.md).

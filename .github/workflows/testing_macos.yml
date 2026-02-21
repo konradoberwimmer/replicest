@@ -19,6 +19,6 @@ jobs:
     - name: Prepare for UniFFI
       run: cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.8.3+v0.25.0
     - name: Build
-      run: cargo build --verbose --features build_replicest_server
+      run: cargo build --verbose
     - name: Run tests
-      run: cargo test --verbose --features build_replicest_server
+      run: cargo test --verbose

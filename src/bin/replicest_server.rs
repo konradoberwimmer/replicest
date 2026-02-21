@@ -1,18 +1,9 @@
 use clap::{CommandFactory, FromArgMatches, Parser};
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs::remove_file;
-use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::net::{UnixDatagram, UnixListener};
-use std::path::PathBuf;
-#[cfg(windows)]
-use directories::{BaseDirs};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use nalgebra::{DMatrix, DVector};
-#[cfg(windows)]
-use uds_windows::{UnixListener, UnixStream};
-#[cfg(unix)]
-use users::get_current_uid;
 use replicest::analysis::*;
 use replicest::errors::DataLengthError;
 use replicest::estimates::QuantileType;
@@ -24,95 +15,92 @@ use replicest::ReplicatedEstimates;
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct CliArguments {
-    /// Path for the UDS server socket (optional, defaults vary by OS)
     #[arg(long, short)]
-    server_socket: Option<PathBuf>,
+    server_port: Option<i32>,
 
-    /// Path for the UDS data socket (optional, defaults vary by OS)
     #[arg(long, short)]
-    data_socket: Option<PathBuf>,
+    data_port: Option<i32>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli_args = CliArguments::from_arg_matches(&mut CliArguments::command().ignore_errors(true).get_matches())?;
 
-    let (message_socket, data_socket) = setup_sockets(cli_args.server_socket, cli_args.data_socket)?;
+    server(cli_args.server_port, cli_args.data_port)
+}
+
+fn server(server_port: Option<i32>, data_port: Option<i32>) -> Result<(), Box<dyn Error>> {
+    let (message_socket, data_socket) = setup_sockets(server_port, data_port)?;
 
     let mut current_analysis = analysis();
 
-    loop {
-        let mut buffer = [0; 1024];
+    'outer: for stream in message_socket.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                loop {
+                    let mut message: String = String::new();
+                    let mut buffered_stream = BufReader::new(&mut stream);
+                    let received = buffered_stream.read_line(&mut message);
 
-        break match message_socket.recv_from(&mut buffer) {
-            Ok((_, client_addr)) => {
-                let message = trim_buffer(&buffer);
+                    if received.is_err() {
+                        println!("Error reading from socket: {}", received.err().unwrap());
+                        continue;
+                    }
 
-                println!("Received: {}", message);
+                    print!("Received: {}", message);
 
-                if message == "shutdown" {
-                    message_socket.send_to_addr(b"shutting down", &client_addr)?;
-                } else if message == "clear" {
-                    current_analysis = analysis();
-                    message_socket.send_to_addr(b"cleared", &client_addr)?;
-                    continue;
-                } else {
-                    let response = handle_message(message, &mut current_analysis, &data_socket);
-                    match response {
-                        Ok(responses) => {
-                            for response_data in responses {
-                                message_socket.send_to_addr(&response_data, &client_addr)?;
+                    if message.trim_end() == "shutdown" {
+                        stream.write_all(b"shutting down\n")?;
+                        break 'outer
+                    } else if message.trim_end() == "clear" {
+                        current_analysis = analysis();
+                        stream.write_all(b"cleared\n")?;
+                        continue;
+                    } else {
+                        let response = handle_message(message.trim_end(), &mut current_analysis, &data_socket);
+                        match response {
+                            Ok(responses) => {
+                                for mut response_data in responses {
+                                    response_data.push(b'\n');
+                                    stream.write_all(&response_data)?;
+                                }
+                            }
+                            Err(err) => {
+                                stream.write_all(format!("error: {}\n", err).as_bytes())?;
                             }
                         }
-                        Err(err) => {
-                            message_socket.send_to_addr(format!("error: {}", err).as_bytes(), &client_addr)?;
-                        }
+                        continue;
                     }
-                    continue;
                 }
             }
-            Err(_) => { }
+            Err(err) => {
+                println!("Error: {}", err);
+            }
         }
     }
 
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn get_default_uds_path() -> String {    
-    format!("/run/user/{}", get_current_uid())
-}
+fn setup_sockets(server_socket_addr: Option<i32>, data_socket_addr: Option<i32>) -> Result<(TcpListener, TcpListener), Box<dyn Error>> {
+    let message_socket = TcpListener::bind(format!("127.0.0.1:{port}", port = match server_socket_addr {
+        None => { 0 }
+        Some(port) => { port }
+    }))?;
 
-#[cfg(target_os = "macos")]
-fn get_default_uds_path() -> String {
-    "/tmp".to_string()
-}
+    println!("Listening on port {}", message_socket.local_addr()?.port());
 
-#[cfg(target_os = "windows")]
-fn get_default_uds_path() -> String {
-    let base_dirs = BaseDirs::new().expect("could not get base directories");
-    format!("{}\\Temp", base_dirs.data_local_dir().to_str().unwrap())
-}
+    let data_socket = TcpListener::bind(format!("127.0.0.1:{port}", port = match data_socket_addr {
+        None => { 0 }
+        Some(port) => { port }
+    }))?;
 
-fn setup_sockets(server_socket_addr: Option<PathBuf>, data_socket_addr: Option<PathBuf>) -> Result<(UnixDatagram, UnixListener), Box<dyn Error>> {
-    let message_socket_addr = server_socket_addr.unwrap_or_else(|| format!("{}/replicest_server", get_default_uds_path()).parse().unwrap());
-    let _ = remove_file(&message_socket_addr);
-    let message_socket = UnixDatagram::bind(&message_socket_addr)?;
-
-    let data_socket_addr = data_socket_addr.unwrap_or_else(|| format!("{}/replicest_server_data", get_default_uds_path()).parse().unwrap());
-    let _ = remove_file(&data_socket_addr);
-    let data_socket = UnixListener::bind(&data_socket_addr)?;
+    println!("Waiting for data on port {}", data_socket.local_addr()?.port());
 
     Ok((message_socket, data_socket))
 }
 
-fn trim_buffer(buffer: &[u8]) -> String {
-    let message = String::from_utf8(buffer.to_vec()).unwrap_or("".to_string());
-    let message = message.trim_end_matches(char::from(0));
-    message.trim_end().to_string()
-}
-
-fn handle_message(message: String, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
-    match message.as_str() {
+fn handle_message(message: &str, analysis: &mut Analysis, data_socket: &TcpListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    match message {
         str if str.starts_with("data") => handle_input_message(InputMessageMode::Data, str, analysis, data_socket),
         "weights" => handle_weights_message(analysis, data_socket),
         str if str.starts_with("replicate weights") => handle_replicate_weights_message(str, analysis, data_socket),
@@ -134,7 +122,7 @@ enum InputMessageMode {
     Groups
 }
 
-fn handle_input_message(mode: InputMessageMode, message: &str, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+fn handle_input_message(mode: InputMessageMode, message: &str, analysis: &mut Analysis, data_socket: &TcpListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let message_arguments = parse_input_message(&message);
 
     match message_arguments {
@@ -191,14 +179,14 @@ fn parse_input_message(message: &str) -> Option<(usize, usize)> {
     }
 }
 
-fn handle_weights_message(analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+fn handle_weights_message(analysis: &mut Analysis, data_socket: &TcpListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let data = listen_for_data(data_socket, 1)?;
     let weight_vector : DVector<f64> = DVector::<f64>::from_iterator(data.nrows(), data.iter().map(|v| v.clone()));
     analysis.set_weights(&weight_vector);
     Ok(vec!(b"received weights".into()))
 }
 
-fn handle_replicate_weights_message(message: &str, analysis: &mut Analysis, data_socket: &UnixListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+fn handle_replicate_weights_message(message: &str, analysis: &mut Analysis, data_socket: &TcpListener) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let message_arguments = parse_replicate_weights_message(&message);
 
     match message_arguments {
@@ -381,7 +369,7 @@ fn handle_calculate_message(analysis: &mut Analysis) -> Result<Vec<Vec<u8>>, Box
     }
 }
 
-fn listen_for_data(data_socket: &UnixListener, columns: usize) -> Result<DMatrix<f64>, Box<dyn Error>> {
+fn listen_for_data(data_socket: &TcpListener, columns: usize) -> Result<DMatrix<f64>, Box<dyn Error>> {
     match data_socket.accept() {
         Ok((mut socket, _)) => {
             let mut buffer = Vec::new();
@@ -421,104 +409,17 @@ fn u8_to_f64_vec(u8_data: Vec<u8>, columns: usize) -> Result<Vec<f64>, Box<dyn E
 
 #[cfg(test)]
 mod tests {
-    use std::env::temp_dir;
     use serial_test::serial;
-    use std::fs::exists;
     use std::io::Write;
+    use std::net::TcpStream;
     use std::ops::Deref;
-    #[cfg(unix)]
-    use std::os::unix::net::UnixStream;
     use super::*;
     use std::thread;
     use std::time::Duration;
-    #[cfg(windows)]
-    use directories::BaseDirs;
     use nalgebra::{dmatrix, dvector};
 
     #[test]
-    #[serial]
-    #[cfg(target_os = "linux")]
-    fn test_setup_default_sockets() {
-        let user_id = get_current_uid();
-
-        assert!(setup_sockets(None, None).is_ok());
-        assert!(exists(format!("/run/user/{}/replicest_server", user_id)).unwrap_or(false));
-        assert!(exists(format!("/run/user/{}/replicest_server_data", user_id)).unwrap_or(false));
-
-        assert!(setup_sockets(None, None).is_ok());
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(target_os = "macos")]
-    fn test_setup_default_sockets() {
-        assert!(setup_sockets(None, None).is_ok());
-        assert!(exists("/tmp/replicest_server").unwrap_or(false));
-        assert!(exists("/tmp/replicest_server_data").unwrap_or(false));
-
-        assert!(setup_sockets(None, None).is_ok());
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(target_os = "windows")]
-    fn test_setup_default_sockets() {
-        let base_dirs = BaseDirs::new().expect("could not get base directories");
-
-        assert!(setup_sockets(None, None).is_ok());
-        assert!(exists(format!("{}/replicest_server", base_dirs.data_local_dir().to_str())).unwrap_or(false));
-        assert!(exists(format!("{}/replicest_server_data", base_dirs.data_local_dir().to_str())).unwrap_or(false));
-
-        assert!(setup_sockets(None, None).is_ok());
-    }
-
-    #[test]
-    #[serial]
-    fn test_setup_custom_sockets() {
-        assert!(setup_sockets(Some(format!("{}/replicest_server_test", temp_dir().to_str().unwrap()).parse().unwrap()), Some(format!("{}/replicest_server_data_test", temp_dir().to_str().unwrap()).parse().unwrap())).is_ok());
-        assert!(exists(format!("{}/replicest_server_test", temp_dir().to_str().unwrap())).unwrap_or(false));
-        assert!(exists(format!("{}/replicest_server_data_test", temp_dir().to_str().unwrap())).unwrap_or(false));
-    }
-
-    #[test]
-    #[serial]
-    fn test_message_socket_general_commands() {
-        let client_addr = "/tmp/replicest_server_test_message_socket_general_commands_client".to_string();
-        let _ = remove_file(&client_addr);
-        let client = UnixDatagram::bind(&client_addr).unwrap();
-
-        let handle = thread::spawn(|| {
-            let return_value = main();
-            assert!(return_value.is_ok());
-        });
-
-        thread::sleep(Duration::from_secs(1));
-
-        let socket_addr = format!("{}/replicest_server", get_default_uds_path());
-        client.connect(&socket_addr).unwrap();
-
-        client.send(b"clear").unwrap();
-
-        let mut buffer = [0; 1024];
-        let _ = client.recv(&mut buffer);
-        let message = trim_buffer(&buffer);
-
-        assert_eq!("cleared", message);
-
-        client.send(b"shutdown").unwrap();
-
-        let mut buffer = [0; 1024];
-        let _ = client.recv(&mut buffer);
-        let message = trim_buffer(&buffer);
-
-        assert_eq!("shutting down", message);
-
-        handle.join().unwrap();
-        let _ = remove_file(&client_addr);
-    }
-
-    #[test]
-    fn test_u8_to_vec() {
+    fn test_u8_to_f64_vec() {
         let result = u8_to_f64_vec(b"abcabcabcabcabcabcabcabc".try_into().unwrap(), 3);
         assert!(result.is_ok());
 
@@ -546,22 +447,128 @@ mod tests {
     }
 
     #[test]
-    fn test_trim_buffer() {
-        let mut buf = [0; 1024];
-        buf[0] = 0x61;
-        buf[1] = 0x62;
-        buf[2] = 0x63;
-        buf[3] = 0x20;
-        let result = trim_buffer(&buf);
-
-        assert_eq!("abc", result);
+    #[serial]
+    fn test_setup_default_sockets() {
+        assert!(setup_sockets(None, None).is_ok());
+        assert!(setup_sockets(None, None).is_ok());
     }
 
     #[test]
+    #[serial]
+    fn test_setup_custom_sockets() {
+        assert!(setup_sockets(Some(8098), Some(8099)).is_ok());
+        assert!(setup_sockets(Some(8098), Some(8098)).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_message_socket_general_commands() {
+        let handle = thread::spawn(|| {
+            let return_value = server(Some(8098), Some(8099));
+            assert!(return_value.is_ok());
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        let mut client = TcpStream::connect("127.0.0.1:8098").unwrap();
+
+        client.write_all(b"clear\n").unwrap();
+
+        let mut response : String = String::new();
+        let mut buffered_reader = BufReader::new(&mut client);
+        let _ = buffered_reader.read_line(&mut response);
+
+        assert_eq!("cleared\n", response);
+        response.clear();
+
+        client.write_all(b"shutdown\n").unwrap();
+
+        buffered_reader = BufReader::new(&mut client);
+        let _ = buffered_reader.read_line(&mut response);
+
+        assert_eq!("shutting down\n", response);
+
+        handle.join().unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_message_socket_parsed_commands() {
+        let handle = thread::spawn(|| {
+            let return_value = server(Some(8098), Some(8099));
+            assert!(return_value.is_ok());
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        let mut client = TcpStream::connect("127.0.0.1:8098").unwrap();
+
+        client.write_all(b"correlation\n").unwrap();
+
+        let mut response : String = String::new();
+        let mut buffered_reader = BufReader::new(&mut client);
+        let _ = buffered_reader.read_line(&mut response);
+
+        assert_eq!("set analysis to correlation\n", response);
+        response.clear();
+
+        client.write_all(b"shutdown\n").unwrap();
+
+        buffered_reader = BufReader::new(&mut client);
+        let _ = buffered_reader.read_line(&mut response);
+
+        assert_eq!("shutting down\n", response);
+
+        handle.join().unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn test_message_socket_send_data() {
+        let handle = thread::spawn(|| {
+            let return_value = server(Some(8098), Some(8099));
+            assert!(return_value.is_ok());
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        let mut client = TcpStream::connect("127.0.0.1:8098").unwrap();
+
+        client.write_all(b"weights\n").unwrap();
+
+        thread::sleep(Duration::from_millis(100));
+
+        let mut data_client = TcpStream::connect("127.0.0.1:8099").unwrap();
+
+        let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
+        let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
+        let bytes = Vec::from(bytes.as_flattened());
+
+        let _ = data_client.write_all(&bytes);
+
+        drop(data_client);
+
+        let mut response : String = String::new();
+        let mut buffered_reader = BufReader::new(&mut client);
+        let _ = buffered_reader.read_line(&mut response);
+
+        assert_eq!("received weights\n", response);
+        response.clear();
+
+        client.write_all(b"shutdown\n").unwrap();
+
+        buffered_reader = BufReader::new(&mut client);
+        let _ = buffered_reader.read_line(&mut response);
+
+        assert_eq!("shutting down\n", response);
+
+        handle.join().unwrap();
+    }
+
+    #[test]
+    #[serial]
     fn test_listen_for_data() {
-        let data_socket_addr = "/tmp/replicest_server_test_listen_for_data".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(Some(8098), Some(8099)).unwrap();
 
         let handle = thread::spawn(move || {
             let return_value = listen_for_data(&data_socket, 2);
@@ -578,9 +585,9 @@ mod tests {
             assert_eq!(0,result.iter().enumerate().filter(|(i, &v)| (expected[(i % 3, i / 3)] - v).abs() > 1e-10).count())
         });
 
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(100));
 
-        let mut client = UnixStream::connect("/tmp/replicest_server_test_listen_for_data").unwrap();
+        let mut client = TcpStream::connect("127.0.0.1:8099").unwrap();
 
         let floats = vec![1.5, 2.0, -3.2, 14.44, -7.1, f64::NAN];
         let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
@@ -593,10 +600,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_listen_for_data_wrong_length() {
-        let data_socket_addr = "/tmp/replicest_server_test_listen_for_data_wrong_length".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(Some(8098), Some(8099)).unwrap();
 
         let handle = thread::spawn(move || {
             let return_value = listen_for_data(&data_socket, 10);
@@ -606,7 +612,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(200));
 
-        let mut client = UnixStream::connect("/tmp/replicest_server_test_listen_for_data_wrong_length").unwrap();
+        let mut client = TcpStream::connect("127.0.0.1:8099").unwrap();
 
         let floats = vec![1.5, 2.0, -3.2, 14.44, -7.1, f64::NAN];
         let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
@@ -619,14 +625,13 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_handle_message_weights() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_weights".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(Some(8098), Some(8099)).unwrap();
 
         let handle = thread::spawn(move || {
             let mut current_analysis = analysis();
-            let return_value = handle_message("weights".to_string(), &mut current_analysis, &data_socket);
+            let return_value = handle_message(&"weights".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
             assert_eq!(Vec::from(b"received weights"), return_value.unwrap()[0]);
             assert_eq!("none (no data; 6 weights of sum 30.540000000000003; no replicate weights)", current_analysis.summary());
@@ -634,7 +639,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(200));
 
-        let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_weights").unwrap();
+        let mut client = TcpStream::connect("127.0.0.1:8099").unwrap();
 
         let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
         let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
@@ -692,14 +697,13 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_handle_message_data_without_imputation() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_data_without_imputation".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(Some(8098), Some(8099)).unwrap();
 
         let handle = thread::spawn(move || {
             let mut current_analysis = analysis();
-            let return_value = handle_message("data 1 3".to_string(), &mut current_analysis, &data_socket);
+            let return_value = handle_message(&"data 1 3".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
             assert_eq!(Vec::from(b"received data"), return_value.unwrap()[0]);
             assert_eq!("none (1 datasets with 2 cases; wgt missing; no replicate weights)", current_analysis.summary());
@@ -707,7 +711,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(200));
 
-        let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_data_without_imputation").unwrap();
+        let mut client = TcpStream::connect("127.0.0.1:8099").unwrap();
 
         let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
         let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
@@ -720,14 +724,13 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_handle_message_groups_with_imputation() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_groups_with_imputation".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(Some(8098), Some(8099)).unwrap();
 
         let handle = thread::spawn(move || {
             let mut current_analysis = analysis();
-            let return_value = handle_message("groups 2 3".to_string(), &mut current_analysis, &data_socket);
+            let return_value = handle_message(&"groups 2 3".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
             assert_eq!(Vec::from(b"received groups"), return_value.unwrap()[0]);
             assert_eq!("none by 3 grouping columns (no data; wgt missing; no replicate weights)", current_analysis.summary());
@@ -736,7 +739,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         for _ in 0..2 {
-            let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_groups_with_imputation").unwrap();
+            let mut client = TcpStream::connect("127.0.0.1:8099").unwrap();
 
             let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
             let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
@@ -752,27 +755,24 @@ mod tests {
 
     #[test]
     fn test_handle_message_replicate_weights_with_error() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_replicate_weights_with_error".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
 
-        let return_value = handle_message("replicate weights x".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"replicate weights x".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"bad request - usage: replicate weights <number_columns>"), return_value.unwrap()[0]);
     }
 
     #[test]
+    #[serial]
     fn test_handle_message_replicate_weights() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_replicate_weights".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(Some(8098), Some(8099)).unwrap();
 
         let handle = thread::spawn(move || {
             let mut current_analysis = analysis();
-            let return_value = handle_message("replicate weights 3".to_string(), &mut current_analysis, &data_socket);
+            let return_value = handle_message(&"replicate weights 3".to_string(), &mut current_analysis, &data_socket);
             assert!(return_value.is_ok());
             assert_eq!(Vec::from(b"received replicate weights"), return_value.unwrap()[0]);
             assert_eq!("none (no data; wgt missing; 3 replicate weights)", current_analysis.summary());
@@ -780,7 +780,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(200));
 
-        let mut client = UnixStream::connect("/tmp/replicest_server_test_handle_message_replicate_weights").unwrap();
+        let mut client = TcpStream::connect("127.0.0.1:8099").unwrap();
 
         let floats = vec![1.5, 2.0, 3.2, 14.44, 7.1, 2.3];
         let bytes = Vec::from_iter(floats.iter().map(|&v| f64::to_ne_bytes(v)));
@@ -794,13 +794,11 @@ mod tests {
 
     #[test]
     fn test_handle_message_set_variance_adjustment_factor_with_error() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_set_variance_adjustment_factor_with_error".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
 
-        let return_value = handle_message("set variance adjustment factor".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"set variance adjustment factor".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"bad request - usage: set variance adjustment factor <factor>"), return_value.unwrap()[0]);
@@ -808,9 +806,7 @@ mod tests {
 
     #[test]
     fn test_handle_message_set_variance_adjustment_factor() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_set_variance_adjustment_factor".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
         current_analysis.with_replicate_weights(&dmatrix![
@@ -819,7 +815,7 @@ mod tests {
             7.0, 8.0, 9.0;
         ]);
 
-        let return_value = handle_message("set variance adjustment factor 0.5000".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"set variance adjustment factor 0.5000".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"set variance adjustment factor"), return_value.unwrap()[0]);
@@ -828,19 +824,17 @@ mod tests {
 
     #[test]
     fn test_handle_message_estimate() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_estimate".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
 
-        let return_value = handle_message("mean".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"mean".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"set analysis to mean"), return_value.unwrap()[0]);
         assert_eq!("mean (no data; wgt missing; no replicate weights)", current_analysis.summary());
 
-        let return_value = handle_message("linear regression".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"linear regression".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"set analysis to linear regression"), return_value.unwrap()[0]);
@@ -849,13 +843,11 @@ mod tests {
 
     #[test]
     fn test_handle_set_quantiles_message() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_set_quantiles_message".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
 
-        let return_value = handle_message("set quantiles 0.10 0.25 0.50 0.75 0.90".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"set quantiles 0.10 0.25 0.50 0.75 0.90".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"set quantiles as requested"), return_value.unwrap()[0]);
@@ -879,13 +871,11 @@ mod tests {
 
     #[test]
     fn test_handle_quantile_type_message() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_quantile_type_message".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
 
-        let return_value = handle_message("quantile type upper".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"quantile type upper".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"quantile type set to upper"), return_value.unwrap()[0]);
@@ -909,13 +899,11 @@ mod tests {
 
     #[test]
     fn test_handle_with_intercept_message() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_with_intercept_message".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
 
-        let return_value = handle_message("with intercept true".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"with intercept true".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"with intercept set to true"), return_value.unwrap()[0]);
@@ -939,14 +927,12 @@ mod tests {
 
     #[test]
     fn test_handle_message_calculate_with_error() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_calculate_with_error".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut current_analysis = analysis();
         current_analysis.mean();
 
-        let return_value = handle_message("calculate".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"calculate".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
         assert_eq!(Vec::from(b"error calculating: Analysis is missing some element: data"), return_value.unwrap()[0]);
@@ -954,9 +940,7 @@ mod tests {
 
     #[test]
     fn test_handle_message_calculate() {
-        let data_socket_addr = "/tmp/replicest_server_test_handle_message_calculate".to_string();
-        let _ = remove_file(&data_socket_addr);
-        let data_socket = UnixListener::bind(&data_socket_addr).unwrap();
+        let (_, data_socket) = setup_sockets(None, None).unwrap();
 
         let mut imp_data: Vec<&DMatrix<f64>> = Vec::new();
         let data0 = DMatrix::from_row_slice(3, 4, &[
@@ -983,7 +967,7 @@ mod tests {
         let mut current_analysis = analysis();
         current_analysis.for_data(Imputation::Yes(&imp_data)).set_weights(&wgt).mean();
 
-        let return_value = handle_message("calculate".to_string(), &mut current_analysis, &data_socket);
+        let return_value = handle_message(&"calculate".to_string(), &mut current_analysis, &data_socket);
 
         assert!(return_value.is_ok());
 
